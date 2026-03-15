@@ -49,6 +49,7 @@ pub fn run() {
             let recorder = Arc::new(AudioRecorder::new());
             app.manage(recorder.clone());
 
+
             // Create main window
             let _main_window = tauri::WebviewWindowBuilder::new(
                 app,
@@ -134,10 +135,8 @@ fn register_shortcut(app_handle: &tauri::AppHandle, settings: &AppSettings) {
 
     let handle = app_handle.clone();
     let _ = app_handle.global_shortcut().on_shortcut(shortcut, move |_app, _shortcut, event| {
-        if event.state == ShortcutState::Pressed {
-            println!("[NanoWhisper] Shortcut pressed");
-            // IMPORTANT: Don't block the shortcut callback thread.
-            // Spawn a new thread so the main thread is free for window creation.
+        if event.state != ShortcutState::Released {
+            println!("[NanoWhisper] Shortcut triggered");
             let h = handle.clone();
             std::thread::spawn(move || {
                 toggle_recording(&h);
@@ -150,8 +149,8 @@ fn register_escape(app_handle: &tauri::AppHandle) {
     let escape: Shortcut = "Escape".parse().unwrap();
     let handle = app_handle.clone();
     let _ = app_handle.global_shortcut().on_shortcut(escape, move |_app, _shortcut, event| {
-        if event.state == ShortcutState::Pressed {
-            println!("[NanoWhisper] Escape pressed");
+        if event.state != ShortcutState::Released {
+            println!("[NanoWhisper] Escape triggered");
             let h = handle.clone();
             std::thread::spawn(move || {
                 cancel_recording(&h);
@@ -190,12 +189,11 @@ fn start_recording(app_handle: &tauri::AppHandle) {
         tauri::WebviewUrl::App("/src/overlay/index.html".into()),
     )
     .title("")
-    .inner_size(340.0, 64.0)
+    .inner_size(360.0, 72.0)
     .resizable(false)
     .maximizable(false)
     .minimizable(false)
     .decorations(false)
-    .transparent(true)
     .always_on_top(true)
     .skip_taskbar(true)
     .center()
@@ -251,6 +249,17 @@ fn stop_and_transcribe(app_handle: &tauri::AppHandle) {
     };
     println!("[NanoWhisper] WAV size: {} bytes", wav_data.len());
 
+    // Save WAV file to ~/.nanowhisper/audio/
+    let timestamp = chrono::Utc::now().format("%Y%m%d_%H%M%S").to_string();
+    let audio_filename = format!("{}.wav", timestamp);
+    let audio_path = history.audio_dir().join(&audio_filename);
+    if let Err(e) = std::fs::write(&audio_path, &wav_data) {
+        eprintln!("[NanoWhisper] Failed to save audio file: {}", e);
+    } else {
+        println!("[NanoWhisper] Audio saved: {}", audio_path.display());
+    }
+    let audio_path_str = audio_path.to_string_lossy().to_string();
+
     let settings = settings::get_settings();
     if settings.api_key.is_empty() {
         eprintln!("[NanoWhisper] API key not configured!");
@@ -281,7 +290,7 @@ fn stop_and_transcribe(app_handle: &tauri::AppHandle) {
             Ok(text) => {
                 println!("[NanoWhisper] Transcription: {}", text);
 
-                // Copy to clipboard and auto-paste
+                // Copy to clipboard and auto-paste into active app
                 let _ = handle.clipboard().write_text(&text);
                 paste::simulate_paste();
 
@@ -291,7 +300,7 @@ fn stop_and_transcribe(app_handle: &tauri::AppHandle) {
                 } else {
                     None
                 };
-                let _ = history.add_entry(&text, &model, duration_ms);
+                let _ = history.add_entry(&text, &model, duration_ms, Some(&audio_path_str));
 
                 // Notify main window to refresh
                 let _ = handle.emit("history-updated", ());

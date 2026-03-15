@@ -6,6 +6,37 @@ import type { HistoryEntry, AppSettings } from "./types";
 
 type View = "onboarding" | "history" | "settings";
 
+const isMac = navigator.userAgent.includes("Mac");
+const modKey = isMac ? "⌘" : "Ctrl";
+
+/** Convert Tauri shortcut string to display string */
+function displayShortcut(s: string): string {
+  return s
+    .replace("CmdOrCtrl", modKey)
+    .replace("Cmd", "⌘")
+    .replace("Ctrl", "Ctrl")
+    .replace("Shift", "⇧")
+    .replace("Alt", isMac ? "⌥" : "Alt")
+    .replace(/\+/g, " ");
+}
+
+/** Convert a KeyboardEvent to a Tauri shortcut string */
+function keyEventToShortcut(e: React.KeyboardEvent): string | null {
+  const key = e.key;
+  if (["Control", "Shift", "Alt", "Meta"].includes(key)) return null;
+
+  const parts: string[] = [];
+  if (e.metaKey || e.ctrlKey) parts.push("CmdOrCtrl");
+  if (e.shiftKey) parts.push("Shift");
+  if (e.altKey) parts.push("Alt");
+
+  let mainKey = key.length === 1 ? key.toUpperCase() : key;
+  if (mainKey === " ") mainKey = "Space";
+  parts.push(mainKey);
+
+  return parts.join("+");
+}
+
 function App() {
   const [view, setView] = useState<View>("history");
   const [history, setHistory] = useState<HistoryEntry[]>([]);
@@ -13,6 +44,7 @@ function App() {
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [copied, setCopied] = useState<number | null>(null);
   const [accessibilityOk, setAccessibilityOk] = useState(false);
+  const [recordingShortcut, setRecordingShortcut] = useState(false);
 
   const loadHistory = useCallback(async () => {
     const entries = await invoke<HistoryEntry[]>("get_history");
@@ -22,7 +54,6 @@ function App() {
   const loadSettings = useCallback(async () => {
     const s = await invoke<AppSettings>("get_settings");
     setSettings(s);
-    // Show onboarding if no API key
     if (!s.api_key) {
       setView("onboarding");
     }
@@ -65,6 +96,46 @@ function App() {
     const d = new Date(ts * 1000);
     return d.toLocaleString();
   };
+
+  const formatDuration = (ms: number | null) => {
+    if (!ms) return "";
+    const secs = Math.round(ms / 1000);
+    if (secs < 60) return `${secs}s`;
+    const mins = Math.floor(secs / 60);
+    const remainSecs = secs % 60;
+    return `${mins}m${remainSecs}s`;
+  };
+
+  /** Shortcut input field component */
+  const ShortcutInput = () => (
+    <div
+      tabIndex={0}
+      className="w-full px-3 py-2 rounded-lg text-sm outline-none text-center"
+      style={{
+        background: "var(--card)",
+        border: recordingShortcut ? "1px solid var(--accent)" : "1px solid var(--border)",
+        color: "var(--text)",
+        cursor: "pointer",
+      }}
+      onClick={() => setRecordingShortcut(true)}
+      onBlur={() => setRecordingShortcut(false)}
+      onKeyDown={(e) => {
+        if (!recordingShortcut || !settings) return;
+        e.preventDefault();
+        const shortcut = keyEventToShortcut(e);
+        if (shortcut) {
+          setSettings({ ...settings, shortcut });
+          setRecordingShortcut(false);
+        }
+      }}
+    >
+      {recordingShortcut ? (
+        <span style={{ color: "var(--accent)" }}>Press shortcut keys...</span>
+      ) : (
+        displayShortcut(settings?.shortcut || "")
+      )}
+    </div>
+  );
 
   // Onboarding view
   if (view === "onboarding" && settings) {
@@ -112,12 +183,11 @@ function App() {
               Required to auto-paste transcribed text into your active app.
             </p>
             {accessibilityOk ? (
-              <p className="text-xs" style={{ color: "#34c759" }}>Permission granted</p>
+              <p className="text-xs" style={{ color: "#34c759" }}>Enabled &#10003;</p>
             ) : (
               <button
                 onClick={async () => {
                   await invoke("request_accessibility");
-                  // Poll for a few seconds
                   for (let i = 0; i < 10; i++) {
                     await new Promise((r) => setTimeout(r, 1000));
                     const ok = await invoke<boolean>("check_accessibility");
@@ -127,21 +197,21 @@ function App() {
                 className="px-3 py-1.5 rounded-lg text-sm"
                 style={{ background: "var(--accent)", color: "white" }}
               >
-                Grant Permission
+                Enable Access
               </button>
             )}
           </div>
 
-          {/* Step 3: Info */}
+          {/* Step 3: Shortcut */}
           <div>
             <div className="flex items-center gap-2 mb-2">
               <span className="text-xs font-medium px-2 py-0.5 rounded-full"
                 style={{ background: "var(--accent)", color: "white" }}>3</span>
-              <span className="text-sm font-medium">Ready</span>
+              <span className="text-sm font-medium">Shortcut</span>
             </div>
-            <p className="text-xs" style={{ color: "var(--text-secondary)" }}>
-              Press <strong>{settings.shortcut}</strong> to start/stop recording.
-              Press <strong>Escape</strong> to cancel. Transcribed text will be auto-pasted.
+            <ShortcutInput />
+            <p className="text-xs mt-1" style={{ color: "var(--text-secondary)" }}>
+              Press once to start recording, press again to stop and transcribe. Escape to cancel.
             </p>
           </div>
         </div>
@@ -228,20 +298,14 @@ function App() {
 
           <div>
             <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Shortcut</label>
-            <input
-              type="text"
-              value={settings.shortcut}
-              onChange={(e) => setSettings({ ...settings, shortcut: e.target.value })}
-              className="w-full px-3 py-2 rounded-lg text-sm outline-none"
-              style={{ background: "var(--card)", border: "1px solid var(--border)", color: "var(--text)" }}
-            />
+            <ShortcutInput />
           </div>
 
           <div>
             <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Accessibility</label>
             <div className="flex items-center gap-2">
               {accessibilityOk ? (
-                <span className="text-xs" style={{ color: "#34c759" }}>&#10003; Granted</span>
+                <span className="text-xs" style={{ color: "#34c759" }}>Enabled &#10003;</span>
               ) : (
                 <button
                   onClick={async () => {
@@ -268,7 +332,7 @@ function App() {
         <h1 className="text-lg font-semibold">NanoWhisper</h1>
         <button
           onClick={() => setView("settings")}
-          className="text-sm"
+          className="text-xl px-1"
           style={{ color: "var(--text-secondary)" }}
         >
           &#9881;
@@ -277,7 +341,11 @@ function App() {
 
       {history.length === 0 ? (
         <p className="text-center py-8 text-sm" style={{ color: "var(--text-secondary)" }}>
-          No transcriptions yet. Press {settings?.shortcut || "Cmd+Shift+Space"} to start recording.
+          No transcriptions yet.
+          <br />
+          Press {displayShortcut(settings?.shortcut || "CmdOrCtrl+Shift+Space")} to start recording.
+          <br />
+          <span className="text-xs">Escape to cancel.</span>
         </p>
       ) : (
         <div className="space-y-2">
@@ -300,7 +368,7 @@ function App() {
               </div>
               <div className="flex items-center justify-between mt-2">
                 <span className="text-xs" style={{ color: "var(--text-secondary)" }}>
-                  {formatTime(entry.timestamp)} · {entry.model}
+                  {formatTime(entry.timestamp)} · {entry.model}{entry.duration_ms ? ` · ${formatDuration(entry.duration_ms)}` : ""}
                 </span>
                 <div className="flex gap-2">
                   <button

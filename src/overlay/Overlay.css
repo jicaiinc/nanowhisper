@@ -10,11 +10,9 @@ body {
   justify-content: center;
   width: 320px;
   height: 52px;
-  background: rgba(30, 30, 30, 0.75);
-  backdrop-filter: blur(20px);
-  -webkit-backdrop-filter: blur(20px);
-  border-radius: 12px;
-  border: 1px solid rgba(255, 255, 255, 0.1);
+  background: rgba(28, 28, 30, 0.92);
+  border-radius: 10px;
+  border: 1px solid rgba(255, 255, 255, 0.08);
   cursor: grab;
   padding: 0 10px;
 }
@@ -30,6 +28,6 @@ body {
 .transcribing-text {
   font-family: -apple-system, BlinkMacSystemFont, sans-serif;
   font-size: 13px;
-  color: rgba(255, 255, 255, 0.7);
-  letter-spacing: 0.5px;
+  color: rgba(255, 255, 255, 0.6);
+  letter-spacing: 0.3px;
 }

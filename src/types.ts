@@ -4,6 +4,7 @@ export interface HistoryEntry {
   model: string;
   timestamp: number;
   duration_ms: number | null;
+  audio_path: string | null;
 }
 
 export interface AppSettings {

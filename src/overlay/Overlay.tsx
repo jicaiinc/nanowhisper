@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { listen } from "@tauri-apps/api/event";
+import { getCurrentWindow } from "@tauri-apps/api/window";
 
 type OverlayState = "recording" | "transcribing";
 
@@ -80,8 +81,19 @@ function Overlay() {
     return () => cancelAnimationFrame(animRef.current);
   }, [state]);
 
+  // Drag via Tauri startDragging — attach to document level
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (e.buttons === 1) {
+        getCurrentWindow().startDragging();
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
   return (
-    <div className="overlay-container" data-tauri-drag-region>
+    <div className="overlay-container">
       {state === "recording" ? (
         <canvas
           ref={canvasRef}

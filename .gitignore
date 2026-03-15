@@ -4,3 +4,5 @@ src-tauri/target/
 .DS_Store
 *.log
 .env
+/.env.bak
+/.mcp.json
