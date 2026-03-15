@@ -3,12 +3,18 @@ import { listen } from "@tauri-apps/api/event";
 
 type OverlayState = "recording" | "transcribing";
 
+const COL_WIDTH = 2;
+const COL_GAP = 1;
+const CANVAS_HEIGHT = 36;
+const SAMPLE_EVERY_N_FRAMES = 4;
+
 function Overlay() {
   const [state, setState] = useState<OverlayState>("recording");
   const levelRef = useRef(0);
-  const smoothLevelRef = useRef(0);
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const phaseRef = useRef(0);
+  const historyRef = useRef<number[]>([]);
+  const frameCountRef = useRef(0);
+  const animRef = useRef<number>(0);
 
   useEffect(() => {
     const unlisten1 = listen<number>("audio-level", (e) => {
@@ -27,65 +33,61 @@ function Overlay() {
     const canvas = canvasRef.current;
     if (!canvas || state !== "recording") return;
 
-    const ctx = canvas.getContext("2d")!;
-    let animId: number;
+    const ctx = canvas.getContext("2d");
+    if (!ctx) return;
+
+    const canvasWidth = 300;
+    const historyLength = Math.floor(canvasWidth / (COL_WIDTH + COL_GAP));
+    historyRef.current = new Array(historyLength).fill(0);
+    frameCountRef.current = 0;
+
+    const dpr = window.devicePixelRatio || 1;
+    canvas.width = canvasWidth * dpr;
+    canvas.height = CANVAS_HEIGHT * dpr;
+    ctx.scale(dpr, dpr);
 
     const draw = () => {
-      const w = canvas.width;
-      const h = canvas.height;
-      ctx.clearRect(0, 0, w, h);
+      const level = levelRef.current;
+      const amplitude = Math.min(1, level * 3);
 
-      // Smooth the level for natural transitions
-      const target = levelRef.current;
-      const smoothed = smoothLevelRef.current;
-      smoothLevelRef.current = smoothed + (target - smoothed) * 0.15;
-      const level = smoothLevelRef.current;
-
-      // Silence threshold
-      const isSilent = level < 0.008;
-
-      phaseRef.current += isSilent ? 0.02 : 0.08;
-
-      ctx.beginPath();
-      ctx.moveTo(0, h / 2);
-
-      for (let x = 0; x < w; x++) {
-        const t = x / w;
-        let y: number;
-
-        if (isSilent) {
-          // Flat line with subtle breathing pulse
-          y = h / 2 + Math.sin(t * Math.PI * 2 + phaseRef.current) * 1.5;
-        } else {
-          // Wave amplitude proportional to voice level
-          const amplitude = level * h * 0.45;
-          y =
-            h / 2 +
-            Math.sin(t * Math.PI * 3 + phaseRef.current) * amplitude +
-            Math.sin(t * Math.PI * 5 + phaseRef.current * 1.3) * amplitude * 0.3 +
-            Math.sin(t * Math.PI * 7 + phaseRef.current * 0.7) * amplitude * 0.1;
+      frameCountRef.current++;
+      if (frameCountRef.current >= SAMPLE_EVERY_N_FRAMES) {
+        frameCountRef.current = 0;
+        const history = historyRef.current;
+        history.push(amplitude);
+        if (history.length > historyLength) {
+          history.shift();
         }
-
-        ctx.lineTo(x, y);
       }
 
-      // Color shifts with level: cyan when quiet, brighter when loud
-      const alpha = isSilent ? 0.4 : 0.5 + level * 0.5;
-      ctx.strokeStyle = `rgba(56, 189, 248, ${alpha})`;
-      ctx.lineWidth = isSilent ? 1.5 : 2 + level * 2;
-      ctx.stroke();
+      ctx.clearRect(0, 0, canvasWidth, CANVAS_HEIGHT);
+      const midY = CANVAS_HEIGHT / 2;
+      const history = historyRef.current;
 
-      animId = requestAnimationFrame(draw);
+      ctx.fillStyle = "rgba(56, 189, 248, 0.75)";
+
+      for (let i = 0; i < history.length; i++) {
+        const amp = history[i];
+        const halfH = Math.max(1, amp * (CANVAS_HEIGHT / 2 - 2));
+        const x = i * (COL_WIDTH + COL_GAP);
+        ctx.fillRect(x, midY - halfH, COL_WIDTH, halfH * 2);
+      }
+
+      animRef.current = requestAnimationFrame(draw);
     };
 
     draw();
-    return () => cancelAnimationFrame(animId);
+    return () => cancelAnimationFrame(animRef.current);
   }, [state]);
 
   return (
-    <div className="overlay-container">
+    <div className="overlay-container" data-tauri-drag-region>
       {state === "recording" ? (
-        <canvas ref={canvasRef} width={320} height={48} className="wave-canvas" />
+        <canvas
+          ref={canvasRef}
+          className="wave-canvas"
+          style={{ width: 300, height: CANVAS_HEIGHT }}
+        />
       ) : (
         <div className="transcribing-text">Transcribing...</div>
       )}

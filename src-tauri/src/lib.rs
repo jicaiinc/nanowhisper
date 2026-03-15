@@ -8,17 +8,23 @@ mod transcribe;
 use history::HistoryManager;
 use recorder::{encode_wav, AudioRecorder};
 use settings::AppSettings;
+use std::path::PathBuf;
 use std::sync::Arc;
 use tauri::{Emitter, Manager};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
+
+/// ~/.nanowhisper/
+pub fn data_dir() -> PathBuf {
+    let home = dirs::home_dir().expect("Cannot determine home directory");
+    home.join(".nanowhisper")
+}
 
 pub fn run() {
     // Load .env file if present (for development)
     let _ = dotenvy::dotenv();
 
     tauri::Builder::default()
-        .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
@@ -36,7 +42,7 @@ pub fn run() {
 
             // Initialize history manager
             let history_manager =
-                Arc::new(HistoryManager::new(&app_handle).expect("Failed to init history DB"));
+                Arc::new(HistoryManager::new().expect("Failed to init history DB"));
             app.manage(history_manager.clone());
 
             // Initialize audio recorder
@@ -83,7 +89,7 @@ pub fn run() {
                 .build(app)?;
 
             // Register global shortcut
-            let settings = settings::get_settings(&app_handle);
+            let settings = settings::get_settings();
             register_shortcut(&app_handle, &settings);
 
             // Show main window
@@ -245,7 +251,7 @@ fn stop_and_transcribe(app_handle: &tauri::AppHandle) {
     };
     println!("[NanoWhisper] WAV size: {} bytes", wav_data.len());
 
-    let settings = settings::get_settings(app_handle);
+    let settings = settings::get_settings();
     if settings.api_key.is_empty() {
         eprintln!("[NanoWhisper] API key not configured!");
         close_overlay(app_handle);

@@ -5,7 +5,6 @@
     "core:default",
     "core:event:default",
     "opener:default",
-    "store:default",
     "clipboard-manager:allow-write-text",
     "global-shortcut:allow-register",
     "global-shortcut:allow-unregister",

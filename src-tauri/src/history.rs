@@ -1,10 +1,8 @@
-use anyhow::{Context, Result};
+use anyhow::Result;
 use rusqlite::Connection;
 use rusqlite_migration::{Migrations, M};
 use serde::Serialize;
 use std::path::PathBuf;
-use tauri::AppHandle;
-use tauri::Manager;
 
 static MIGRATIONS: &[M] = &[M::up(
     "CREATE TABLE IF NOT EXISTS transcriptions (
@@ -30,13 +28,10 @@ pub struct HistoryManager {
 }
 
 impl HistoryManager {
-    pub fn new(app_handle: &AppHandle) -> Result<Self> {
-        let app_dir = app_handle
-            .path()
-            .app_data_dir()
-            .context("Failed to get app data dir")?;
-        std::fs::create_dir_all(&app_dir)?;
-        let db_path = app_dir.join("history.db");
+    pub fn new() -> Result<Self> {
+        let data_dir = crate::data_dir();
+        std::fs::create_dir_all(&data_dir)?;
+        let db_path = data_dir.join("history.db");
 
         let mut conn = Connection::open(&db_path)?;
         let migrations = Migrations::new(MIGRATIONS.to_vec());

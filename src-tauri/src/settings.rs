@@ -1,8 +1,5 @@
 use serde::{Deserialize, Serialize};
-use tauri::AppHandle;
-use tauri_plugin_store::StoreExt;
-
-const STORE_PATH: &str = "settings.json";
+use std::path::PathBuf;
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AppSettings {
@@ -40,27 +37,23 @@ impl Default for AppSettings {
     }
 }
 
-pub fn get_settings(app: &AppHandle) -> AppSettings {
-    let store = match app.store(STORE_PATH) {
-        Ok(s) => s,
-        Err(_) => return AppSettings::default(),
-    };
+fn settings_path() -> PathBuf {
+    crate::data_dir().join("settings.json")
+}
 
-    match store.get("settings") {
-        Some(value) => serde_json::from_value::<AppSettings>(value).unwrap_or_default(),
-        None => {
-            let defaults = AppSettings::default();
-            let _ = store.set(
-                "settings",
-                serde_json::to_value(&defaults).unwrap(),
-            );
-            defaults
-        }
+pub fn get_settings() -> AppSettings {
+    let path = settings_path();
+    match std::fs::read_to_string(&path) {
+        Ok(content) => serde_json::from_str::<AppSettings>(&content).unwrap_or_default(),
+        Err(_) => AppSettings::default(),
     }
 }
 
-pub fn save_settings(app: &AppHandle, settings: &AppSettings) {
-    if let Ok(store) = app.store(STORE_PATH) {
-        let _ = store.set("settings", serde_json::to_value(settings).unwrap());
+pub fn save_settings(settings: &AppSettings) {
+    let dir = crate::data_dir();
+    let _ = std::fs::create_dir_all(&dir);
+    let path = dir.join("settings.json");
+    if let Ok(json) = serde_json::to_string_pretty(settings) {
+        let _ = std::fs::write(&path, json);
     }
 }

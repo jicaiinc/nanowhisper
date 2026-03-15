@@ -19,13 +19,13 @@ pub fn clear_history(history: State<'_, Arc<HistoryManager>>) -> Result<(), Stri
 }
 
 #[tauri::command]
-pub fn get_settings(app: tauri::AppHandle) -> AppSettings {
-    settings::get_settings(&app)
+pub fn get_settings() -> AppSettings {
+    settings::get_settings()
 }
 
 #[tauri::command]
-pub fn save_settings(app: tauri::AppHandle, settings: AppSettings) {
-    settings::save_settings(&app, &settings);
+pub fn save_settings(settings: AppSettings) {
+    settings::save_settings(&settings);
 }
 
 #[tauri::command]

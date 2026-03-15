@@ -9,12 +9,18 @@ body {
   align-items: center;
   justify-content: center;
   width: 320px;
-  height: 48px;
+  height: 52px;
   background: rgba(30, 30, 30, 0.75);
   backdrop-filter: blur(20px);
   -webkit-backdrop-filter: blur(20px);
   border-radius: 12px;
   border: 1px solid rgba(255, 255, 255, 0.1);
+  cursor: grab;
+  padding: 0 10px;
+}
+
+.overlay-container:active {
+  cursor: grabbing;
 }
 
 .wave-canvas {
