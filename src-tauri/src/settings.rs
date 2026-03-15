@@ -14,7 +14,7 @@ pub struct AppSettings {
 }
 
 fn default_api_key() -> String {
-    std::env::var("OPENAI_API_KEY").unwrap_or_default()
+    String::new()
 }
 fn default_model() -> String {
     "gpt-4o-transcribe".to_string()

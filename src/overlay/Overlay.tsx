@@ -6,7 +6,7 @@ type OverlayState = "recording" | "transcribing";
 
 const COL_WIDTH = 2;
 const COL_GAP = 1;
-const CANVAS_HEIGHT = 36;
+const CANVAS_HEIGHT = 40;
 const SAMPLE_EVERY_N_FRAMES = 4;
 
 function Overlay() {
@@ -81,7 +81,7 @@ function Overlay() {
     return () => cancelAnimationFrame(animRef.current);
   }, [state]);
 
-  // Drag via Tauri startDragging — attach to document level
+  // Drag support — now works because transparent(true) is removed
   useEffect(() => {
     const handler = (e: MouseEvent) => {
       if (e.buttons === 1) {
@@ -93,16 +93,12 @@ function Overlay() {
   }, []);
 
   return (
-    <div className="overlay-container">
-      {state === "recording" ? (
-        <canvas
-          ref={canvasRef}
-          className="wave-canvas"
-          style={{ width: 300, height: CANVAS_HEIGHT }}
-        />
-      ) : (
-        <div className="transcribing-text">Transcribing...</div>
-      )}
+    <div className="overlay-body">
+      <canvas
+        ref={canvasRef}
+        className="wave-canvas"
+        style={{ width: 300, height: CANVAS_HEIGHT }}
+      />
     </div>
   );
 }

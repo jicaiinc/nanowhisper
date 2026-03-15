@@ -1,4 +1,16 @@
 use enigo::{Enigo, Key, Keyboard, Settings, Direction};
+use std::sync::Mutex;
+use tauri::{AppHandle, Manager};
+
+pub struct EnigoState(pub Mutex<Enigo>);
+
+impl EnigoState {
+    pub fn new() -> Result<Self, String> {
+        let enigo = Enigo::new(&Settings::default())
+            .map_err(|e| format!("Failed to initialize Enigo: {}", e))?;
+        Ok(Self(Mutex::new(enigo)))
+    }
+}
 
 /// Check if accessibility permission is granted (macOS)
 pub fn is_accessibility_trusted() -> bool {
@@ -28,14 +40,12 @@ pub fn request_accessibility() -> bool {
 }
 
 /// Simulate Cmd+V (macOS) or Ctrl+V (Windows/Linux) to paste clipboard content
-pub fn simulate_paste() {
-    let mut enigo = match Enigo::new(&Settings::default()) {
-        Ok(e) => e,
-        Err(e) => {
-            eprintln!("[NanoWhisper] Failed to create enigo: {}", e);
-            return;
-        }
-    };
+pub fn simulate_paste(app_handle: &AppHandle) -> Result<(), String> {
+    let enigo_state = app_handle
+        .try_state::<EnigoState>()
+        .ok_or("Enigo not initialized (need Accessibility permission)")?;
+    let mut enigo = enigo_state.0.lock()
+        .map_err(|e| format!("Failed to lock Enigo: {}", e))?;
 
     std::thread::sleep(std::time::Duration::from_millis(80));
 
@@ -48,15 +58,14 @@ pub fn simulate_paste() {
     #[cfg(target_os = "linux")]
     let (modifier, v_key) = (Key::Control, Key::Unicode('v'));
 
-    if let Err(e) = enigo.key(modifier, Direction::Press) {
-        eprintln!("[NanoWhisper] Failed to press modifier: {}", e);
-        return;
-    }
-    if let Err(e) = enigo.key(v_key, Direction::Click) {
-        eprintln!("[NanoWhisper] Failed to click V: {}", e);
-    }
-    std::thread::sleep(std::time::Duration::from_millis(50));
-    let _ = enigo.key(modifier, Direction::Release);
+    enigo.key(modifier, Direction::Press)
+        .map_err(|e| format!("Failed to press modifier: {}", e))?;
+    enigo.key(v_key, Direction::Click)
+        .map_err(|e| format!("Failed to click V: {}", e))?;
+    std::thread::sleep(std::time::Duration::from_millis(100));
+    enigo.key(modifier, Direction::Release)
+        .map_err(|e| format!("Failed to release modifier: {}", e))?;
 
     println!("[NanoWhisper] Paste simulated");
+    Ok(())
 }

@@ -49,9 +49,23 @@ body {
 
 input, select {
   -webkit-appearance: none;
+  -moz-appearance: none;
   appearance: none;
   background-image: none !important;
   box-shadow: none !important;
+  -webkit-box-shadow: none !important;
+  border: 1px solid var(--border) !important;
+  background-color: var(--card) !important;
+  color: var(--text) !important;
+  outline: none !important;
+  backdrop-filter: none !important;
+  -webkit-backdrop-filter: none !important;
+}
+
+input:focus, select:focus {
+  border-color: var(--accent) !important;
+  box-shadow: none !important;
+  outline: none !important;
 }
 
 select {

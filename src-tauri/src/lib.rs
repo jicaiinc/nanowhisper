@@ -9,7 +9,9 @@ use history::HistoryManager;
 use recorder::{encode_wav, AudioRecorder};
 use settings::AppSettings;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Arc;
+use std::time::{SystemTime, UNIX_EPOCH};
 use tauri::{Emitter, Manager};
 use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
@@ -36,6 +38,8 @@ pub fn run() {
             commands::save_settings,
             commands::check_accessibility,
             commands::request_accessibility,
+            commands::initialize_enigo,
+            commands::retry_transcription,
         ])
         .setup(|app| {
             let app_handle = app.handle().clone();
@@ -48,6 +52,13 @@ pub fn run() {
             // Initialize audio recorder
             let recorder = Arc::new(AudioRecorder::new());
             app.manage(recorder.clone());
+
+            // Initialize enigo if accessibility is already granted
+            if paste::is_accessibility_trusted() {
+                if let Ok(enigo_state) = paste::EnigoState::new() {
+                    app.manage(enigo_state);
+                }
+            }
 
 
             // Create main window
@@ -123,6 +134,10 @@ pub fn run() {
         });
 }
 
+static SHORTCUT_PROCESSING: AtomicBool = AtomicBool::new(false);
+static LAST_SHORTCUT_TIME: AtomicU64 = AtomicU64::new(0);
+const DEBOUNCE_MS: u64 = 500;
+
 fn register_shortcut(app_handle: &tauri::AppHandle, settings: &AppSettings) {
     let shortcut_str = &settings.shortcut;
     let shortcut: Shortcut = match shortcut_str.parse() {
@@ -135,11 +150,30 @@ fn register_shortcut(app_handle: &tauri::AppHandle, settings: &AppSettings) {
 
     let handle = app_handle.clone();
     let _ = app_handle.global_shortcut().on_shortcut(shortcut, move |_app, _shortcut, event| {
-        if event.state != ShortcutState::Released {
+        if event.state == ShortcutState::Pressed {
+            // Debounce: ignore duplicate events within 500ms
+            let now = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap()
+                .as_millis() as u64;
+            let last = LAST_SHORTCUT_TIME.load(Ordering::SeqCst);
+            if now - last < DEBOUNCE_MS {
+                return;
+            }
+            LAST_SHORTCUT_TIME.store(now, Ordering::SeqCst);
+
+            // CAS guard: prevent concurrent toggle
+            if SHORTCUT_PROCESSING.compare_exchange(
+                false, true, Ordering::SeqCst, Ordering::SeqCst
+            ).is_err() {
+                return;
+            }
+
             println!("[NanoWhisper] Shortcut triggered");
             let h = handle.clone();
             std::thread::spawn(move || {
                 toggle_recording(&h);
+                SHORTCUT_PROCESSING.store(false, Ordering::SeqCst);
             });
         }
     });
@@ -182,24 +216,49 @@ fn start_recording(app_handle: &tauri::AppHandle) {
 
     println!("[NanoWhisper] Creating overlay window...");
 
-    // Create overlay window
+    // Create overlay window at top-center of screen
+    let overlay_width = 320.0;
+    let overlay_height = 48.0;
+    let (pos_x, pos_y) = if let Some(monitor) = app_handle.primary_monitor().ok().flatten() {
+        let scale = monitor.scale_factor();
+        let monitor_width = monitor.size().width as f64 / scale;
+        let x = (monitor_width - overlay_width) / 2.0;
+        (x, 46.0)
+    } else {
+        (400.0, 46.0)
+    };
+
     match tauri::WebviewWindowBuilder::new(
         app_handle,
         "overlay",
         tauri::WebviewUrl::App("/src/overlay/index.html".into()),
     )
     .title("")
-    .inner_size(360.0, 72.0)
+    .inner_size(overlay_width, overlay_height)
+    .position(pos_x, pos_y)
     .resizable(false)
     .maximizable(false)
     .minimizable(false)
     .decorations(false)
     .always_on_top(true)
     .skip_taskbar(true)
-    .center()
+    .focused(false)
     .build()
     {
-        Ok(_) => println!("[NanoWhisper] Overlay window created"),
+        Ok(w) => {
+            println!("[NanoWhisper] Overlay window created");
+            // Ensure main window stays hidden
+            if let Some(main_w) = app_handle.get_webview_window("main") {
+                if !main_w.is_visible().unwrap_or(false) {
+                    let _ = main_w.hide();
+                }
+            }
+            // On macOS, prevent app activation
+            #[cfg(target_os = "macos")]
+            {
+                let _ = w.set_always_on_top(true);
+            }
+        }
         Err(e) => eprintln!("[NanoWhisper] Failed to create overlay: {}", e),
     }
 
@@ -292,7 +351,9 @@ fn stop_and_transcribe(app_handle: &tauri::AppHandle) {
 
                 // Copy to clipboard and auto-paste into active app
                 let _ = handle.clipboard().write_text(&text);
-                paste::simulate_paste();
+                if let Err(e) = paste::simulate_paste(&handle) {
+                    eprintln!("[NanoWhisper] Paste failed: {}", e);
+                }
 
                 // Save to history
                 let duration_ms = if sample_rate > 0 {
