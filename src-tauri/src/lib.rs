@@ -242,22 +242,10 @@ fn start_recording(app_handle: &tauri::AppHandle) {
     .decorations(false)
     .always_on_top(true)
     .skip_taskbar(true)
-    .focused(false)
     .build()
     {
-        Ok(w) => {
+        Ok(_) => {
             println!("[NanoWhisper] Overlay window created");
-            // Ensure main window stays hidden
-            if let Some(main_w) = app_handle.get_webview_window("main") {
-                if !main_w.is_visible().unwrap_or(false) {
-                    let _ = main_w.hide();
-                }
-            }
-            // On macOS, prevent app activation
-            #[cfg(target_os = "macos")]
-            {
-                let _ = w.set_always_on_top(true);
-            }
         }
         Err(e) => eprintln!("[NanoWhisper] Failed to create overlay: {}", e),
     }

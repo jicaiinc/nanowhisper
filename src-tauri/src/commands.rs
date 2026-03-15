@@ -37,7 +37,7 @@ pub fn check_accessibility() -> bool {
 
 #[tauri::command]
 pub fn request_accessibility() -> bool {
-    crate::paste::request_accessibility()
+    crate::paste::request_accessibility_with_prompt()
 }
 
 #[tauri::command]

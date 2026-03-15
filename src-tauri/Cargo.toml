@@ -25,6 +25,7 @@ rusqlite = { version = "0.37", features = ["bundled"] }
 rusqlite_migration = "2.3"
 anyhow = "1"
 chrono = "0.4"
+core-foundation = "0.10"
 dirs = "6.0"
 dotenvy = "0.15"
 enigo = "0.6"
