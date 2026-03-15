@@ -39,6 +39,7 @@ function App() {
   const [expandedId, setExpandedId] = useState<number | null>(null);
   const [copied, setCopied] = useState<number | null>(null);
   const [retrying, setRetrying] = useState<number | null>(null);
+  const [microphoneOk, setMicrophoneOk] = useState(false);
   const [accessibilityOk, setAccessibilityOk] = useState(false);
   const [recordingShortcut, setRecordingShortcut] = useState(false);
 
@@ -53,18 +54,22 @@ function App() {
     if (!s.api_key) setView("onboarding");
   }, []);
 
-  const checkAccessibility = useCallback(async () => {
-    const ok = await invoke<boolean>("check_accessibility");
-    setAccessibilityOk(ok);
+  const checkPermissions = useCallback(async () => {
+    const mic = await invoke<boolean>("check_microphone");
+    setMicrophoneOk(mic);
+    const acc = await invoke<boolean>("check_accessibility");
+    setAccessibilityOk(acc);
   }, []);
 
   useEffect(() => {
     loadHistory();
     loadSettings();
-    checkAccessibility();
+    checkPermissions();
     const unlisten = listen("history-updated", () => loadHistory());
-    return () => { unlisten.then((f) => f()); };
-  }, [loadHistory, loadSettings, checkAccessibility]);
+    // Poll permissions every 2s while on onboarding
+    const permInterval = setInterval(checkPermissions, 2000);
+    return () => { unlisten.then((f) => f()); clearInterval(permInterval); };
+  }, [loadHistory, loadSettings, checkPermissions]);
 
   const copyText = async (text: string, id: number) => {
     await writeText(text);
@@ -157,6 +162,7 @@ function App() {
 
   // Onboarding
   if (view === "onboarding" && settings) {
+    const canProceed = settings.api_key && microphoneOk;
     return (
       <div className="p-6 max-w-md mx-auto">
         <div className="text-center mb-6">
@@ -165,6 +171,7 @@ function App() {
         </div>
 
         <div className="space-y-5">
+          {/* Step 1: API Key */}
           <div>
             <div className="flex items-center gap-2 mb-2">
               <span className="text-xs font-medium px-2 py-0.5 rounded-full" style={{ background: "var(--accent)", color: "white" }}>1</span>
@@ -181,57 +188,78 @@ function App() {
             />
           </div>
 
+          {/* Step 2: Microphone (required) */}
           <div>
             <div className="flex items-center gap-2 mb-2">
               <span className="text-xs font-medium px-2 py-0.5 rounded-full" style={{ background: "var(--accent)", color: "white" }}>2</span>
-              <span className="text-sm font-medium">Accessibility</span>
-              {accessibilityOk && <span style={{ color: "#34c759" }}>&#10003;</span>}
+              <span className="text-sm font-medium">Microphone</span>
+              {microphoneOk && <span style={{ color: "#34c759" }}>&#10003;</span>}
             </div>
-            {accessibilityOk ? (
-              <div className="px-3 py-2 rounded-lg text-sm" style={{ background: "var(--card)", border: "1px solid var(--border)", color: "#34c759" }}>
-                Enabled
-              </div>
+            {microphoneOk ? (
+              <div className="px-3 py-2 rounded-lg text-sm" style={{ background: "var(--card)", border: "1px solid var(--border)", color: "#34c759" }}>Enabled</div>
             ) : (
               <button
                 onClick={async () => {
-                  await invoke("request_accessibility");
-                  for (let i = 0; i < 10; i++) {
-                    await new Promise((r) => setTimeout(r, 1000));
-                    const ok = await invoke<boolean>("check_accessibility");
-                    if (ok) { setAccessibilityOk(true); await invoke("initialize_enigo"); break; }
-                  }
+                  await invoke("request_microphone");
+                  const ok = await invoke<boolean>("check_microphone");
+                  setMicrophoneOk(ok);
                 }}
                 className="w-full px-3 py-2 rounded-lg text-sm font-medium"
                 style={{ background: "var(--accent)", color: "white" }}
               >
-                Open System Settings
+                Allow Microphone
               </button>
             )}
-            <p className="text-xs mt-1" style={{ color: "var(--text-secondary)" }}>
-              Auto-paste transcribed text into active app. Optional.
-            </p>
+            <p className="text-xs mt-1" style={{ color: "var(--text-secondary)" }}>Required for voice recording.</p>
           </div>
 
+          {/* Step 3: Accessibility (optional) */}
           <div>
             <div className="flex items-center gap-2 mb-2">
-              <span className="text-xs font-medium px-2 py-0.5 rounded-full" style={{ background: "var(--accent)", color: "white" }}>3</span>
+              <span className="text-xs font-medium px-2 py-0.5 rounded-full" style={{ background: "var(--border)", color: "var(--text-secondary)" }}>3</span>
+              <span className="text-sm font-medium">Accessibility</span>
+              {accessibilityOk && <span style={{ color: "#34c759" }}>&#10003;</span>}
+              {!accessibilityOk && <span className="text-xs" style={{ color: "var(--text-secondary)" }}>(optional)</span>}
+            </div>
+            {accessibilityOk ? (
+              <div className="px-3 py-2 rounded-lg text-sm" style={{ background: "var(--card)", border: "1px solid var(--border)", color: "#34c759" }}>Enabled</div>
+            ) : (
+              <button
+                onClick={async () => {
+                  await invoke("request_accessibility");
+                }}
+                className="w-full px-3 py-2 rounded-lg text-sm font-medium"
+                style={{ background: "var(--card)", border: "1px solid var(--border)", color: "var(--text)" }}
+              >
+                Enable Auto-Paste
+              </button>
+            )}
+            <p className="text-xs mt-1" style={{ color: "var(--text-secondary)" }}>Auto-paste into active app after transcription.</p>
+          </div>
+
+          {/* Step 4: Shortcut */}
+          <div>
+            <div className="flex items-center gap-2 mb-2">
+              <span className="text-xs font-medium px-2 py-0.5 rounded-full" style={{ background: "var(--border)", color: "var(--text-secondary)" }}>4</span>
               <span className="text-sm font-medium">Shortcut</span>
             </div>
             <ShortcutInput />
-            <p className="text-xs mt-1" style={{ color: "var(--text-secondary)" }}>
-              Press to record, again to stop. Escape to cancel.
-            </p>
+            <p className="text-xs mt-1" style={{ color: "var(--text-secondary)" }}>Press to record, again to stop. Escape to cancel.</p>
           </div>
         </div>
 
         <button
-          onClick={() => { saveSettings(); setView("history"); }}
-          disabled={!settings.api_key}
+          onClick={() => {
+            saveSettings();
+            if (accessibilityOk) invoke("initialize_enigo");
+            setView("history");
+          }}
+          disabled={!canProceed}
           className="w-full mt-6 py-2.5 rounded-lg text-sm font-medium"
           style={{
-            background: settings.api_key ? "var(--accent)" : "var(--border)",
-            color: settings.api_key ? "white" : "var(--text-secondary)",
-            cursor: settings.api_key ? "pointer" : "not-allowed",
+            background: canProceed ? "var(--accent)" : "var(--border)",
+            color: canProceed ? "white" : "var(--text-secondary)",
+            cursor: canProceed ? "pointer" : "not-allowed",
           }}
         >
           Get Started

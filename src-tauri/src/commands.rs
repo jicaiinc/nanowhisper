@@ -41,6 +41,42 @@ pub fn request_accessibility() -> bool {
 }
 
 #[tauri::command]
+pub fn check_microphone() -> bool {
+    // Try to open default input device — if permission denied, returns false
+    use cpal::traits::{HostTrait, DeviceTrait};
+    let host = cpal::default_host();
+    if let Some(device) = host.default_input_device() {
+        device.default_input_config().is_ok()
+    } else {
+        false
+    }
+}
+
+#[tauri::command]
+pub fn request_microphone() -> bool {
+    // On macOS, opening a cpal stream triggers the permission dialog
+    use cpal::traits::{HostTrait, DeviceTrait, StreamTrait};
+    let host = cpal::default_host();
+    if let Some(device) = host.default_input_device() {
+        if let Ok(config) = device.default_input_config() {
+            let stream = device.build_input_stream(
+                &config.into(),
+                |_data: &[f32], _: &cpal::InputCallbackInfo| {},
+                |_err| {},
+                None,
+            );
+            if let Ok(s) = stream {
+                let _ = s.play();
+                std::thread::sleep(std::time::Duration::from_millis(200));
+                drop(s);
+                return true;
+            }
+        }
+    }
+    false
+}
+
+#[tauri::command]
 pub fn initialize_enigo(app: AppHandle) -> Result<(), String> {
     if app.try_state::<EnigoState>().is_some() {
         return Ok(());

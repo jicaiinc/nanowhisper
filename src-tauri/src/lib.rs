@@ -38,6 +38,8 @@ pub fn run() {
             commands::save_settings,
             commands::check_accessibility,
             commands::request_accessibility,
+            commands::check_microphone,
+            commands::request_microphone,
             commands::initialize_enigo,
             commands::retry_transcription,
         ])
@@ -124,14 +126,7 @@ pub fn run() {
         })
         .build(tauri::generate_context!())
         .expect("error while building tauri application")
-        .run(|app, event| {
-            if let tauri::RunEvent::Reopen { .. } = event {
-                if let Some(w) = app.get_webview_window("main") {
-                    let _ = w.show();
-                    let _ = w.set_focus();
-                }
-            }
-        });
+        .run(|_app, _event| {});
 }
 
 static SHORTCUT_PROCESSING: AtomicBool = AtomicBool::new(false);
@@ -222,10 +217,12 @@ fn start_recording(app_handle: &tauri::AppHandle) {
     let (pos_x, pos_y) = if let Some(monitor) = app_handle.primary_monitor().ok().flatten() {
         let scale = monitor.scale_factor();
         let monitor_width = monitor.size().width as f64 / scale;
+        let monitor_height = monitor.size().height as f64 / scale;
         let x = (monitor_width - overlay_width) / 2.0;
-        (x, 46.0)
+        let y = monitor_height - overlay_height - 80.0; // 80px from bottom
+        (x, y)
     } else {
-        (400.0, 46.0)
+        (400.0, 800.0)
     };
 
     match tauri::WebviewWindowBuilder::new(
