@@ -31,6 +31,11 @@ pub fn is_accessibility_trusted() -> bool {
 pub fn request_accessibility_with_prompt() -> bool {
     #[cfg(target_os = "macos")]
     {
+        // Don't prompt if already trusted
+        if is_accessibility_trusted() {
+            return true;
+        }
+
         use core_foundation::base::TCFType;
         use core_foundation::boolean::CFBoolean;
         use core_foundation::dictionary::CFDictionary;
@@ -54,9 +59,19 @@ pub fn request_accessibility_with_prompt() -> bool {
 
 /// Simulate Cmd+V (macOS) or Ctrl+V (Windows/Linux) to paste clipboard content
 pub fn simulate_paste(app_handle: &AppHandle) -> Result<(), String> {
+    // Auto-initialize if not yet done but accessibility is granted
+    if app_handle.try_state::<EnigoState>().is_none() {
+        if !is_accessibility_trusted() {
+            return Err("Accessibility not granted".into());
+        }
+        let state = EnigoState::new()?;
+        app_handle.manage(state);
+        println!("[NanoWhisper] EnigoState auto-initialized");
+    }
+
     let enigo_state = app_handle
         .try_state::<EnigoState>()
-        .ok_or("Enigo not initialized (need Accessibility permission)")?;
+        .ok_or("Enigo not initialized")?;
     let mut enigo = enigo_state.0.lock()
         .map_err(|e| format!("Failed to lock Enigo: {}", e))?;
 
