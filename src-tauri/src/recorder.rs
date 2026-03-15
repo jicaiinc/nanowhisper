@@ -44,6 +44,9 @@ impl AudioRecorder {
         let (cmd_tx, cmd_rx) = mpsc::channel::<Cmd>();
         let is_recording = self.is_recording.clone();
 
+        // Mark as recording before spawning thread to prevent double-start
+        *is_recording.lock().unwrap() = true;
+
         // Build stream on worker thread so Stream doesn't need Send
         let worker = thread::spawn(move || {
             let host = cpal::default_host();
@@ -51,6 +54,7 @@ impl AudioRecorder {
                 Some(d) => d,
                 None => {
                     log::error!("No input device available");
+                    *is_recording.lock().unwrap() = false;
                     return;
                 }
             };
@@ -58,6 +62,7 @@ impl AudioRecorder {
                 Ok(c) => c,
                 Err(e) => {
                     log::error!("Failed to get input config: {}", e);
+                    *is_recording.lock().unwrap() = false;
                     return;
                 }
             };
@@ -73,6 +78,7 @@ impl AudioRecorder {
                 SampleFormat::U16 => build_stream::<u16>(&device, &config.into(), audio_tx, channels),
                 _ => {
                     log::error!("Unsupported sample format");
+                    *is_recording.lock().unwrap() = false;
                     return;
                 }
             };
@@ -80,15 +86,15 @@ impl AudioRecorder {
                 Ok(s) => s,
                 Err(e) => {
                     log::error!("Failed to build stream: {}", e);
+                    *is_recording.lock().unwrap() = false;
                     return;
                 }
             };
             if let Err(e) = stream.play() {
                 log::error!("Failed to play stream: {}", e);
+                *is_recording.lock().unwrap() = false;
                 return;
             }
-
-            *is_recording.lock().unwrap() = true;
 
             let mut buffer: Vec<f32> = Vec::new();
 

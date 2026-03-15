@@ -13,6 +13,9 @@ use tauri_plugin_clipboard_manager::ClipboardExt;
 use tauri_plugin_global_shortcut::{GlobalShortcutExt, Shortcut, ShortcutState};
 
 pub fn run() {
+    // Load .env file if present (for development)
+    let _ = dotenvy::dotenv();
+
     tauri::Builder::default()
         .plugin(tauri_plugin_store::Builder::default().build())
         .plugin(tauri_plugin_clipboard_manager::init())
@@ -108,7 +111,6 @@ pub fn run() {
 }
 
 fn register_shortcut(app_handle: &tauri::AppHandle, settings: &AppSettings) {
-    // Record toggle shortcut
     let shortcut_str = &settings.shortcut;
     let shortcut: Shortcut = match shortcut_str.parse() {
         Ok(s) => s,
@@ -124,15 +126,22 @@ fn register_shortcut(app_handle: &tauri::AppHandle, settings: &AppSettings) {
             toggle_recording(&handle);
         }
     });
+}
 
-    // Escape to cancel
+fn register_escape(app_handle: &tauri::AppHandle) {
     let escape: Shortcut = "Escape".parse().unwrap();
-    let handle2 = app_handle.clone();
+    let handle = app_handle.clone();
     let _ = app_handle.global_shortcut().on_shortcut(escape, move |_app, _shortcut, event| {
         if event.state == ShortcutState::Pressed {
-            cancel_recording(&handle2);
+            cancel_recording(&handle);
         }
     });
+}
+
+fn unregister_escape(app_handle: &tauri::AppHandle) {
+    if let Ok(escape) = "Escape".parse::<Shortcut>() {
+        let _ = app_handle.global_shortcut().unregister(escape);
+    }
 }
 
 fn toggle_recording(app_handle: &tauri::AppHandle) {
@@ -169,10 +178,16 @@ fn start_recording(app_handle: &tauri::AppHandle) {
     if let Err(e) = recorder.start(app_handle.clone()) {
         log::error!("Failed to start recording: {}", e);
         close_overlay(app_handle);
+        return;
     }
+
+    // Register Escape only while recording
+    register_escape(app_handle);
 }
 
 fn stop_and_transcribe(app_handle: &tauri::AppHandle) {
+    unregister_escape(app_handle);
+
     let recorder = app_handle.state::<Arc<AudioRecorder>>();
     let history = app_handle.state::<Arc<HistoryManager>>();
 
@@ -253,6 +268,7 @@ fn stop_and_transcribe(app_handle: &tauri::AppHandle) {
 fn cancel_recording(app_handle: &tauri::AppHandle) {
     let recorder = app_handle.state::<Arc<AudioRecorder>>();
     if recorder.is_recording() {
+        unregister_escape(app_handle);
         recorder.cancel();
         close_overlay(app_handle);
     }

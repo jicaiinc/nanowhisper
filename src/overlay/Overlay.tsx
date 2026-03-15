@@ -5,13 +5,13 @@ type OverlayState = "recording" | "transcribing";
 
 function Overlay() {
   const [state, setState] = useState<OverlayState>("recording");
-  const [level, setLevel] = useState(0);
+  const levelRef = useRef(0);
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const phaseRef = useRef(0);
 
   useEffect(() => {
     const unlisten1 = listen<number>("audio-level", (e) => {
-      setLevel(e.payload);
+      levelRef.current = e.payload;
     });
     const unlisten2 = listen("transcribing", () => {
       setState("transcribing");
@@ -34,6 +34,7 @@ function Overlay() {
       const h = canvas.height;
       ctx.clearRect(0, 0, w, h);
 
+      const level = levelRef.current;
       const amplitude = Math.max(4, level * h * 0.4);
       phaseRef.current += 0.08;
 
@@ -55,7 +56,7 @@ function Overlay() {
 
     draw();
     return () => cancelAnimationFrame(animId);
-  }, [state, level]);
+  }, [state]);
 
   return (
     <div className="overlay-container">

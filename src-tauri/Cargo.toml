@@ -26,6 +26,7 @@ rusqlite = { version = "0.37", features = ["bundled"] }
 rusqlite_migration = "2.3"
 anyhow = "1"
 chrono = "0.4"
+dotenvy = "0.15"
 log = "0.4"
 tokio = { version = "1", features = ["sync"] }
 
