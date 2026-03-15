@@ -88,6 +88,9 @@ pub fn run() {
                 let _ = w.show();
             }
 
+            println!("[NanoWhisper] App started. Shortcut: {}", settings.shortcut);
+            println!("[NanoWhisper] API key configured: {}", !settings.api_key.is_empty());
+
             Ok(())
         })
         .on_window_event(|window, event| {
@@ -115,7 +118,7 @@ fn register_shortcut(app_handle: &tauri::AppHandle, settings: &AppSettings) {
     let shortcut: Shortcut = match shortcut_str.parse() {
         Ok(s) => s,
         Err(e) => {
-            log::error!("Invalid shortcut '{}': {}", shortcut_str, e);
+            eprintln!("[NanoWhisper] Invalid shortcut '{}': {}", shortcut_str, e);
             return;
         }
     };
@@ -123,7 +126,13 @@ fn register_shortcut(app_handle: &tauri::AppHandle, settings: &AppSettings) {
     let handle = app_handle.clone();
     let _ = app_handle.global_shortcut().on_shortcut(shortcut, move |_app, _shortcut, event| {
         if event.state == ShortcutState::Pressed {
-            toggle_recording(&handle);
+            println!("[NanoWhisper] Shortcut pressed");
+            // IMPORTANT: Don't block the shortcut callback thread.
+            // Spawn a new thread so the main thread is free for window creation.
+            let h = handle.clone();
+            std::thread::spawn(move || {
+                toggle_recording(&h);
+            });
         }
     });
 }
@@ -133,7 +142,11 @@ fn register_escape(app_handle: &tauri::AppHandle) {
     let handle = app_handle.clone();
     let _ = app_handle.global_shortcut().on_shortcut(escape, move |_app, _shortcut, event| {
         if event.state == ShortcutState::Pressed {
-            cancel_recording(&handle);
+            println!("[NanoWhisper] Escape pressed");
+            let h = handle.clone();
+            std::thread::spawn(move || {
+                cancel_recording(&h);
+            });
         }
     });
 }
@@ -148,8 +161,10 @@ fn toggle_recording(app_handle: &tauri::AppHandle) {
     let recorder = app_handle.state::<Arc<AudioRecorder>>();
 
     if recorder.is_recording() {
+        println!("[NanoWhisper] Stopping recording...");
         stop_and_transcribe(app_handle);
     } else {
+        println!("[NanoWhisper] Starting recording...");
         start_recording(app_handle);
     }
 }
@@ -157,8 +172,10 @@ fn toggle_recording(app_handle: &tauri::AppHandle) {
 fn start_recording(app_handle: &tauri::AppHandle) {
     let recorder = app_handle.state::<Arc<AudioRecorder>>();
 
+    println!("[NanoWhisper] Creating overlay window...");
+
     // Create overlay window
-    let _ = tauri::WebviewWindowBuilder::new(
+    match tauri::WebviewWindowBuilder::new(
         app_handle,
         "overlay",
         tauri::WebviewUrl::App("/src/overlay/index.html".into()),
@@ -173,13 +190,19 @@ fn start_recording(app_handle: &tauri::AppHandle) {
     .always_on_top(true)
     .skip_taskbar(true)
     .center()
-    .build();
+    .build()
+    {
+        Ok(_) => println!("[NanoWhisper] Overlay window created"),
+        Err(e) => eprintln!("[NanoWhisper] Failed to create overlay: {}", e),
+    }
 
+    println!("[NanoWhisper] Starting audio recorder...");
     if let Err(e) = recorder.start(app_handle.clone()) {
-        log::error!("Failed to start recording: {}", e);
+        eprintln!("[NanoWhisper] Failed to start recording: {}", e);
         close_overlay(app_handle);
         return;
     }
+    println!("[NanoWhisper] Recording started");
 
     // Register Escape only while recording
     register_escape(app_handle);
@@ -194,32 +217,35 @@ fn stop_and_transcribe(app_handle: &tauri::AppHandle) {
     // Notify overlay
     let _ = app_handle.emit("transcribing", ());
 
+    println!("[NanoWhisper] Stopping recorder...");
     let audio = match recorder.stop() {
         Ok(a) => a,
         Err(e) => {
-            log::error!("Failed to stop recording: {}", e);
+            eprintln!("[NanoWhisper] Failed to stop recording: {}", e);
             close_overlay(app_handle);
             return;
         }
     };
+    println!("[NanoWhisper] Got {} samples at {}Hz", audio.samples.len(), audio.sample_rate);
 
     let sample_count = audio.samples.len();
     let sample_rate = audio.sample_rate;
 
+    println!("[NanoWhisper] Encoding WAV...");
     let wav_data = match encode_wav(&audio) {
         Ok(d) => d,
         Err(e) => {
-            log::error!("Failed to encode WAV: {}", e);
+            eprintln!("[NanoWhisper] Failed to encode WAV: {}", e);
             close_overlay(app_handle);
             return;
         }
     };
+    println!("[NanoWhisper] WAV size: {} bytes", wav_data.len());
 
     let settings = settings::get_settings(app_handle);
     if settings.api_key.is_empty() {
-        log::error!("API key not configured");
+        eprintln!("[NanoWhisper] API key not configured!");
         close_overlay(app_handle);
-        // Show main window for settings
         if let Some(w) = app_handle.get_webview_window("main") {
             let _ = w.show();
             let _ = w.set_focus();
@@ -233,6 +259,8 @@ fn stop_and_transcribe(app_handle: &tauri::AppHandle) {
     let language = settings.language.clone();
     let api_key = settings.api_key.clone();
 
+    println!("[NanoWhisper] Calling API with model={}...", model);
+
     tauri::async_runtime::spawn(async move {
         let lang = if language == "auto" {
             None
@@ -242,6 +270,8 @@ fn stop_and_transcribe(app_handle: &tauri::AppHandle) {
 
         match transcribe::transcribe_audio(&api_key, &model, wav_data, lang).await {
             Ok(text) => {
+                println!("[NanoWhisper] Transcription: {}", text);
+
                 // Copy to clipboard
                 let _ = handle.clipboard().write_text(&text);
 
@@ -257,7 +287,7 @@ fn stop_and_transcribe(app_handle: &tauri::AppHandle) {
                 let _ = handle.emit("history-updated", ());
             }
             Err(e) => {
-                log::error!("Transcription failed: {}", e);
+                eprintln!("[NanoWhisper] Transcription failed: {}", e);
             }
         }
 
@@ -268,6 +298,7 @@ fn stop_and_transcribe(app_handle: &tauri::AppHandle) {
 fn cancel_recording(app_handle: &tauri::AppHandle) {
     let recorder = app_handle.state::<Arc<AudioRecorder>>();
     if recorder.is_recording() {
+        println!("[NanoWhisper] Cancelling recording...");
         unregister_escape(app_handle);
         recorder.cancel();
         close_overlay(app_handle);
