@@ -170,7 +170,8 @@ mod platform {
 #[cfg(target_os = "windows")]
 mod platform {
     use super::*;
-    use std::time::Duration;
+    use std::ffi::c_void;
+    use std::sync::atomic::AtomicPtr;
     use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CallNextHookEx, GetMessageW, SetWindowsHookExW, KBDLLHOOKSTRUCT, MSG, WH_KEYBOARD_LL,
@@ -182,7 +183,7 @@ mod platform {
     static KEY_DOWN: AtomicBool = AtomicBool::new(false);
     static KEY_TIME: AtomicU64 = AtomicU64::new(0);
     static OTHER_KEY: AtomicBool = AtomicBool::new(false);
-    static HOOK: std::sync::atomic::AtomicIsize = std::sync::atomic::AtomicIsize::new(0);
+    static HOOK: AtomicPtr<c_void> = AtomicPtr::new(std::ptr::null_mut());
 
     unsafe extern "system" fn hook_proc(code: i32, w_param: WPARAM, l_param: LPARAM) -> LRESULT {
         if code >= 0 {
@@ -213,8 +214,13 @@ mod platform {
 
     pub fn start() {
         std::thread::spawn(|| unsafe {
-            let hook = SetWindowsHookExW(WH_KEYBOARD_LL, Some(hook_proc), 0, 0);
-            if hook == 0 {
+            let hook = SetWindowsHookExW(
+                WH_KEYBOARD_LL,
+                Some(hook_proc),
+                std::ptr::null_mut(),
+                0,
+            );
+            if hook.is_null() {
                 log::error!("Failed to install keyboard hook");
                 return;
             }
@@ -223,7 +229,7 @@ mod platform {
 
             // Message pump: required for low-level keyboard hook to receive events.
             let mut msg: MSG = std::mem::zeroed();
-            while GetMessageW(&mut msg, 0, 0, 0) > 0 {}
+            while GetMessageW(&mut msg, std::ptr::null_mut(), 0, 0) > 0 {}
         });
     }
 }

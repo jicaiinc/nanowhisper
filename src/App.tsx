@@ -532,8 +532,8 @@ function App() {
 
   // History
   return (
-    <div className="p-4 max-w-md mx-auto">
-      <div className="flex items-center justify-between mb-4">
+    <div className="flex flex-col h-screen max-w-md mx-auto">
+      <div className="flex items-center justify-between p-4 pb-2" style={{ background: "var(--bg)" }}>
         <div className="flex items-center gap-2">
           <img src={logoUrl} alt="" width={24} height={24} />
           <h1 className="text-lg font-semibold">NanoWhisper</h1>
@@ -541,6 +541,7 @@ function App() {
         <button onClick={() => setView("settings")} className="text-xl px-1" style={{ color: "var(--text-secondary)" }}>&#9881;</button>
       </div>
 
+      <div className="flex-1 overflow-y-auto px-4 pb-4">
       {errorMsg && (
         <div className="mb-3 px-3 py-2 rounded-lg text-xs" style={{ background: "#ff453a20", border: "1px solid #ff453a40", color: "#ff453a" }}>
           Transcription failed: {errorMsg}
@@ -625,6 +626,7 @@ function App() {
           })}
         </div>
       )}
+      </div>
     </div>
   );
 }

@@ -25,9 +25,8 @@ pub fn is_accessibility_trusted() -> bool {
     true
 }
 
-/// Request accessibility with native macOS prompt dialog
-/// This uses AXIsProcessTrustedWithOptions with kAXTrustedCheckOptionPrompt=true
-/// which triggers the system dialog AND adds the app to the Accessibility list
+/// Request accessibility permission using AXIsProcessTrustedWithOptions.
+/// This adds the app to the Accessibility list and shows a system prompt.
 pub fn request_accessibility_with_prompt() -> bool {
     #[cfg(target_os = "macos")]
     {
@@ -35,14 +34,20 @@ pub fn request_accessibility_with_prompt() -> bool {
             return true;
         }
 
-        // Directly open System Settings to Accessibility page (no system dialog)
-        let _ = std::process::Command::new("open")
-            .arg(
-                "x-apple.systempreferences:com.apple.preference.security?Privacy_Accessibility",
-            )
-            .spawn();
+        use core_foundation::base::TCFType;
+        use core_foundation::boolean::CFBoolean;
+        use core_foundation::dictionary::CFDictionary;
+        use core_foundation::string::CFString;
 
-        false
+        extern "C" {
+            fn AXIsProcessTrustedWithOptions(options: core_foundation::base::CFTypeRef) -> bool;
+        }
+
+        let key = CFString::new("AXTrustedCheckOptionPrompt");
+        let value = CFBoolean::true_value();
+        let options = CFDictionary::from_CFType_pairs(&[(key, value)]);
+
+        unsafe { AXIsProcessTrustedWithOptions(options.as_CFTypeRef()) }
     }
     #[cfg(not(target_os = "macos"))]
     true
