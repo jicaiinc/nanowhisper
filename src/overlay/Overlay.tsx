@@ -129,6 +129,8 @@ function Overlay() {
           <span className="dot" />
           <span className="dot" />
           <span className="dot" />
+          <span className="dot" />
+          <span className="dot" />
         </div>
       ) : (
         <canvas

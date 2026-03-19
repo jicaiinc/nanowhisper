@@ -31,28 +31,25 @@ html, body {
 
 .transcribing-dots {
   display: flex;
-  gap: 7px;
+  gap: 10px;
   align-items: center;
   justify-content: center;
 }
 
 .transcribing-dots .dot {
-  width: 6px;
-  height: 6px;
+  width: 5px;
+  height: 5px;
   border-radius: 50%;
   background: rgba(255, 255, 255, 0.8);
-  animation: dotPulse 1.4s ease-in-out infinite;
+  animation: dotPulse 1.6s ease-in-out infinite;
 }
 
-.transcribing-dots .dot:nth-child(2) {
-  animation-delay: 0.16s;
-}
-
-.transcribing-dots .dot:nth-child(3) {
-  animation-delay: 0.32s;
-}
+.transcribing-dots .dot:nth-child(2) { animation-delay: 0.12s; }
+.transcribing-dots .dot:nth-child(3) { animation-delay: 0.24s; }
+.transcribing-dots .dot:nth-child(4) { animation-delay: 0.36s; }
+.transcribing-dots .dot:nth-child(5) { animation-delay: 0.48s; }
 
 @keyframes dotPulse {
-  0%, 80%, 100% { transform: scale(0.5); opacity: 0.3; }
-  40% { transform: scale(1); opacity: 1; }
+  0%, 80%, 100% { transform: scale(0.5); opacity: 0.25; }
+  40% { transform: scale(1.1); opacity: 1; }
 }

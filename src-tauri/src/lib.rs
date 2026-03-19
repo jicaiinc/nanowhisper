@@ -272,6 +272,11 @@ fn start_recording(app_handle: &tauri::AppHandle) {
         (400.0, 800.0)
     };
 
+    // Hide main window to prevent it from appearing when overlay activates the app
+    if let Some(w) = app_handle.get_webview_window("main") {
+        let _ = w.hide();
+    }
+
     match tauri::WebviewWindowBuilder::new(
         app_handle,
         "overlay",

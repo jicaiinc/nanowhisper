@@ -3,6 +3,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import type { HistoryEntry, AppSettings } from "./types";
+import logoUrl from "./assets/logo.png";
 
 type View = "onboarding" | "history" | "settings";
 
@@ -276,8 +277,11 @@ function App() {
     const canProceed = settings.api_key && microphoneOk && (isMac ? accessibilityOk : true);
     return (
       <div className="p-6 max-w-md mx-auto">
-        <div className="text-center mb-6">
-          <h1 className="text-xl font-semibold mb-1">NanoWhisper</h1>
+        <div className="flex flex-col items-center mb-6">
+          <div className="flex items-center gap-2 mb-1">
+            <img src={logoUrl} alt="" width={28} height={28} />
+            <h1 className="text-xl font-semibold">NanoWhisper</h1>
+          </div>
           <p className="text-xs" style={{ color: "var(--text-secondary)" }}>Pure Whisper. Nothing else.</p>
         </div>
 
@@ -442,7 +446,10 @@ function App() {
   return (
     <div className="p-4 max-w-md mx-auto">
       <div className="flex items-center justify-between mb-4">
-        <h1 className="text-lg font-semibold">NanoWhisper</h1>
+        <div className="flex items-center gap-2">
+          <img src={logoUrl} alt="" width={24} height={24} />
+          <h1 className="text-lg font-semibold">NanoWhisper</h1>
+        </div>
         <button onClick={() => setView("settings")} className="text-xl px-1" style={{ color: "var(--text-secondary)" }}>&#9881;</button>
       </div>
 
