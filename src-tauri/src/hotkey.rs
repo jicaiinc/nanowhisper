@@ -28,7 +28,8 @@ fn trigger_callback() {
     }
     let now = now_ms();
     let last = DEBOUNCE_LAST.load(Ordering::SeqCst);
-    if now.saturating_sub(last) < DEBOUNCE_MS {
+    // Skip debounce check on the very first trigger (last == 0 means never fired)
+    if last != 0 && now.saturating_sub(last) < DEBOUNCE_MS {
         return;
     }
     DEBOUNCE_LAST.store(now, Ordering::SeqCst);
