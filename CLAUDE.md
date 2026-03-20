@@ -50,9 +50,9 @@ No tests or linting are configured.
 
 ### Recording Flow
 
-1. Global shortcut (default: `Cmd+Shift+Space`) triggers `toggle_recording()`
-2. **Start**: Creates overlay window → starts `cpal` audio stream → registers Escape for cancel
-3. **Stop** (shortcut again): Stops recording → encodes WAV (16-bit mono) → calls OpenAI API → clipboard write → simulate Cmd+V → save to SQLite history → close overlay
+1. Native hotkey (default: Right Command on macOS / Right Control on Windows, solo tap) triggers `toggle_recording()`
+2. **Start**: Creates overlay window → plays start sound → starts `cpal` audio stream → registers Escape for cancel
+3. **Stop** (hotkey again): Unregisters Escape → stops recording → encodes WAV (16-bit mono) → calls OpenAI API → clipboard write → closes overlay → waits 350ms → simulate Cmd+V → save to SQLite history
 4. **Cancel** (Escape): Stops recording, discards audio, closes overlay
 
 ### Data Storage
@@ -65,9 +65,9 @@ All persisted to `~/.nanowhisper/`:
 ### Key Technical Decisions
 
 - **Shortcut debounce**: 500ms debounce + `AtomicBool` CAS guard to prevent Tauri's known macOS double-fire bug
-- **Opaque overlay**: Solid dark background (`#1c1c1e`) instead of window transparency, avoiding known Tauri macOS transparency bugs
+- **Transparent overlay**: Window uses `.transparent(true)` with semi-transparent background (`rgba(28, 28, 30, 0.92)`)
 - **All windows created programmatically** — none defined in `tauri.conf.json`
-- **enigo v0.6** wrapped in `Mutex<Option<Enigo>>` (`EnigoState`), lazily initialized after Accessibility permission is granted
+- **enigo v0.6** wrapped in `Mutex<Enigo>` (`EnigoState`), initialized after Accessibility permission is granted
 - `.env` loaded via `dotenvy` for dev convenience (gitignored)
 
 ### Frontend Stack
