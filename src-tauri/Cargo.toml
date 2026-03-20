@@ -1,6 +1,6 @@
 [package]
 name = "nanowhisper"
-version = "0.1.11"
+version = "0.1.12"
 edition = "2021"
 license = "Apache-2.0"
 
@@ -31,7 +31,7 @@ enigo = "0.6"
 log = "0.4"
 
 [target.'cfg(target_os = "windows")'.dependencies]
-windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation"] }
+windows-sys = { version = "0.59", features = ["Win32_UI_WindowsAndMessaging", "Win32_Foundation", "Win32_System_LibraryLoader"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 block2 = { version = "0.6.2", default-features = false, features = ["alloc"] }

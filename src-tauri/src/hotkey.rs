@@ -174,6 +174,7 @@ mod platform {
     use std::ffi::c_void;
     use std::sync::atomic::AtomicPtr;
     use windows_sys::Win32::Foundation::{LPARAM, LRESULT, WPARAM};
+    use windows_sys::Win32::System::LibraryLoader::GetModuleHandleW;
     use windows_sys::Win32::UI::WindowsAndMessaging::{
         CallNextHookEx, GetMessageW, SetWindowsHookExW, KBDLLHOOKSTRUCT, MSG, WH_KEYBOARD_LL,
         WM_KEYDOWN, WM_KEYUP, WM_SYSKEYDOWN, WM_SYSKEYUP,
@@ -215,10 +216,11 @@ mod platform {
 
     pub fn start() {
         std::thread::spawn(|| unsafe {
+            let hmod = GetModuleHandleW(std::ptr::null());
             let hook = SetWindowsHookExW(
                 WH_KEYBOARD_LL,
                 Some(hook_proc),
-                std::ptr::null_mut(),
+                hmod,
                 0,
             );
             if hook.is_null() {
