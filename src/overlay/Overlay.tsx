@@ -95,13 +95,16 @@ function Overlay() {
       const history = historyRef.current;
       const maxHalfH = CANVAS_HEIGHT / 2 - 2;
       const radius = COL_WIDTH / 2;
+      const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
 
       for (let i = 0; i < history.length; i++) {
         const amp = history[i];
         const halfH = Math.max(1.5, amp * maxHalfH);
         const x = i * (COL_WIDTH + COL_GAP);
         const alpha = 0.35 + amp * 0.6;
-        ctx.fillStyle = `rgba(255, 255, 255, ${alpha})`;
+        ctx.fillStyle = isDark
+          ? `rgba(255, 255, 255, ${alpha})`
+          : `rgba(0, 0, 0, ${alpha * 0.85})`;
         const barY = midY - halfH;
         const barH = halfH * 2;
         ctx.beginPath();

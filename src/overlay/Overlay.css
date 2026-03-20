@@ -1,3 +1,17 @@
+:root {
+  --overlay-bg: rgba(255, 255, 255, 0.92);
+  --overlay-fg: rgba(0, 0, 0, 0.7);
+  --overlay-dot: rgba(0, 0, 0, 0.6);
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --overlay-bg: rgba(28, 28, 30, 0.92);
+    --overlay-fg: rgba(255, 255, 255, 0.8);
+    --overlay-dot: rgba(255, 255, 255, 0.8);
+  }
+}
+
 html, body {
   margin: 0;
   padding: 0;
@@ -13,7 +27,7 @@ html, body {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: rgba(28, 28, 30, 0.92);
+  background: var(--overlay-bg);
   border-radius: 14px;
   cursor: grab;
   user-select: none;
@@ -40,7 +54,7 @@ html, body {
   width: 5px;
   height: 5px;
   border-radius: 50%;
-  background: rgba(255, 255, 255, 0.8);
+  background: var(--overlay-dot);
   animation: dotPulse 1.6s ease-in-out infinite;
 }
 
