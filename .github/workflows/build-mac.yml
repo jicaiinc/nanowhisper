@@ -1,0 +1,104 @@
+# Manual macOS build with code signing and notarization.
+# Trigger: GitHub Actions UI (workflow_dispatch)
+
+name: Build macOS
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: build-mac
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: macos-latest
+    name: Build (macOS ARM64)
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: aarch64-apple-darwin
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: aarch64-apple-darwin
+
+      - name: Import macOS signing certificate
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.MAC_CSC_LINK }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+        run: |
+          CERTIFICATE_PATH=$RUNNER_TEMP/certificate.p12
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$CERTIFICATE_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security default-keychain -s "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -t 21600 -u "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" -k "$KEYCHAIN_PATH" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+          rm "$CERTIFICATE_PATH"
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build Tauri app (signed + notarized)
+        env:
+          APPLE_SIGNING_IDENTITY: "Developer ID Application: Jicai, Inc. (NDX2ZZ8U2R)"
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: NDX2ZZ8U2R
+        run: npx tauri build --target aarch64-apple-darwin
+
+      - name: Verify code signing
+        run: |
+          DMG=$(find src-tauri/target/aarch64-apple-darwin/release/bundle -name "*.dmg" | head -1)
+          echo "Verifying DMG: $DMG"
+
+          hdiutil verify "$DMG"
+
+          hdiutil attach "$DMG" -nobrowse
+          APP=$(find /Volumes -maxdepth 2 -name "*.app" -path "*NanoWhisper*" 2>/dev/null | head -1)
+          echo "Found app: $APP"
+
+          echo "=== Code signature ==="
+          codesign --verify --deep --strict --verbose=2 "$APP"
+
+          echo "=== Gatekeeper assessment ==="
+          spctl -a -t exec -vvv "$APP" || true
+
+          echo "=== Notarization staple ==="
+          xcrun stapler validate "$DMG" || true
+
+          hdiutil detach "$(dirname "$APP")" -quiet
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-mac-arm64
+          path: |
+            src-tauri/target/aarch64-apple-darwin/release/bundle/**/*.dmg
+          if-no-files-found: error
+          retention-days: 7

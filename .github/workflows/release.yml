@@ -7,6 +7,11 @@
 #   macOS x64    → macos-latest  (Apple Silicon, cross-compiled via --target)
 #   Linux x64    → ubuntu-22.04
 #   Windows x64  → windows-latest
+#
+# Code signing:
+#   macOS:   Developer ID Application certificate + Apple notarization
+#   Windows: Azure Trusted Signing via trusted-signing-cli
+#   Linux:   not signed
 
 name: Release
 
@@ -114,11 +119,109 @@ jobs:
             libasound2-dev \
             rpm
 
+      # ── macOS code signing setup ────────────────────────────────
+      - name: Import macOS signing certificate
+        if: runner.os == 'macOS'
+        env:
+          APPLE_CERTIFICATE: ${{ secrets.MAC_CSC_LINK }}
+          APPLE_CERTIFICATE_PASSWORD: ${{ secrets.MAC_CSC_KEY_PASSWORD }}
+        run: |
+          CERTIFICATE_PATH=$RUNNER_TEMP/certificate.p12
+          KEYCHAIN_PATH=$RUNNER_TEMP/app-signing.keychain-db
+          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
+
+          echo "$APPLE_CERTIFICATE" | base64 --decode > "$CERTIFICATE_PATH"
+
+          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security default-keychain -s "$KEYCHAIN_PATH"
+          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security set-keychain-settings -t 21600 -u "$KEYCHAIN_PATH"
+          security import "$CERTIFICATE_PATH" -k "$KEYCHAIN_PATH" \
+            -P "$APPLE_CERTIFICATE_PASSWORD" -T /usr/bin/codesign
+          security set-key-partition-list -S apple-tool:,apple:,codesign: \
+            -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
+          security find-identity -v -p codesigning "$KEYCHAIN_PATH"
+
+          rm "$CERTIFICATE_PATH"
+
+      # ── Windows code signing setup ──────────────────────────────
+      - name: Setup Windows code signing
+        if: runner.os == 'Windows'
+        run: cargo install trusted-signing-cli
+
       - name: Install dependencies
         run: npm install
 
-      - name: Build Tauri app
+      # ── Platform-specific builds ────────────────────────────────
+      - name: Build Tauri app (macOS, signed + notarized)
+        if: runner.os == 'macOS'
+        env:
+          APPLE_SIGNING_IDENTITY: "Developer ID Application: Jicai, Inc. (NDX2ZZ8U2R)"
+          APPLE_ID: ${{ secrets.APPLE_ID }}
+          APPLE_PASSWORD: ${{ secrets.APPLE_APP_SPECIFIC_PASSWORD }}
+          APPLE_TEAM_ID: NDX2ZZ8U2R
         run: npx tauri build --target ${{ matrix.target }}
+
+      - name: Build Tauri app (Windows, signed)
+        if: runner.os == 'Windows'
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        shell: pwsh
+        run: |
+          $signConfig = @'
+          {
+            "bundle": {
+              "windows": {
+                "signCommand": "trusted-signing-cli -e https://eus.codesigning.azure.net -a nanowhisper -c nanowhisper -d NanoWhisper %1"
+              }
+            }
+          }
+          '@
+          $configPath = Join-Path $env:RUNNER_TEMP "tauri-sign.json"
+          [System.IO.File]::WriteAllText($configPath, $signConfig.Trim(), [System.Text.UTF8Encoding]::new($false))
+          npx tauri build --target ${{ matrix.target }} --config $configPath
+
+      - name: Build Tauri app (Linux)
+        if: runner.os == 'Linux'
+        run: npx tauri build --target ${{ matrix.target }}
+
+      # ── Verification ────────────────────────────────────────────
+      - name: Verify macOS code signing
+        if: runner.os == 'macOS'
+        run: |
+          DMG=$(find src-tauri/target/${{ matrix.target }}/release/bundle -name "*.dmg" | head -1)
+          echo "Verifying DMG: $DMG"
+
+          hdiutil verify "$DMG"
+
+          hdiutil attach "$DMG" -nobrowse
+          APP=$(find /Volumes -maxdepth 2 -name "*.app" -path "*NanoWhisper*" 2>/dev/null | head -1)
+          echo "Found app: $APP"
+
+          echo "=== Code signature ==="
+          codesign --verify --deep --strict --verbose=2 "$APP"
+
+          echo "=== Gatekeeper assessment ==="
+          spctl -a -t exec -vvv "$APP" || true
+
+          echo "=== Notarization staple ==="
+          xcrun stapler validate "$DMG" || true
+
+          hdiutil detach "$(dirname "$APP")" -quiet
+
+      - name: Verify Windows code signing
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem "src-tauri/target/${{ matrix.target }}/release/bundle" -Recurse -Include *.exe,*.msi
+          foreach ($file in $files) {
+            Write-Host "Verifying: $($file.FullName)"
+            $sig = Get-AuthenticodeSignature $file.FullName
+            Write-Host "  Status: $($sig.Status)"
+            Write-Host "  Signer: $($sig.SignerCertificate.Subject)"
+          }
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
@@ -183,14 +286,14 @@ jobs:
 
             ### Downloads
 
-            #### macOS
+            #### macOS (signed & notarized)
 
             | File | Architecture | Note |
             |------|-------------|------|
             | `.dmg` (arm64) | Apple Silicon (M1/M2/M3/M4) | **Recommended** — most Mac users |
             | `.dmg` (x64) | Intel | For pre-2021 Macs |
 
-            #### Windows
+            #### Windows (signed)
 
             | File | Note |
             |------|------|
@@ -209,14 +312,7 @@ jobs:
 
             ---
 
-            ### ⚠️ Installation Notes
-
-            **macOS (unsigned):** The app is not signed with an Apple Developer certificate. macOS will block it by default. To install, run:
-            ```bash
-            xattr -cr /Applications/NanoWhisper.app
-            ```
-
-            **Windows (unsigned):** The app is not code-signed. Windows SmartScreen will show a warning when you first run it. Click **"More info"** → **"Run anyway"** to proceed.
+            ### Installation Notes
 
             **Linux:**
             ```bash

@@ -1,0 +1,86 @@
+# Manual Windows build with Azure Trusted Signing.
+# Trigger: GitHub Actions UI (workflow_dispatch)
+
+name: Build Windows
+
+on:
+  workflow_dispatch:
+
+concurrency:
+  group: build-win
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    name: Build (Windows x64)
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-pc-windows-msvc
+
+      - name: Rust cache
+        uses: swatinem/rust-cache@v2
+        with:
+          workspaces: src-tauri
+          key: x86_64-pc-windows-msvc
+
+      - name: Setup code signing
+        run: cargo install trusted-signing-cli
+
+      - name: Install dependencies
+        run: npm install
+
+      - name: Build Tauri app (signed)
+        env:
+          AZURE_TENANT_ID: ${{ secrets.AZURE_TENANT_ID }}
+          AZURE_CLIENT_ID: ${{ secrets.AZURE_CLIENT_ID }}
+          AZURE_CLIENT_SECRET: ${{ secrets.AZURE_CLIENT_SECRET }}
+        shell: pwsh
+        run: |
+          $signConfig = @'
+          {
+            "bundle": {
+              "windows": {
+                "signCommand": "trusted-signing-cli -e https://eus.codesigning.azure.net -a nanowhisper -c nanowhisper -d NanoWhisper %1"
+              }
+            }
+          }
+          '@
+          $configPath = Join-Path $env:RUNNER_TEMP "tauri-sign.json"
+          [System.IO.File]::WriteAllText($configPath, $signConfig.Trim(), [System.Text.UTF8Encoding]::new($false))
+          npx tauri build --target x86_64-pc-windows-msvc --config $configPath
+
+      - name: Verify code signing
+        shell: pwsh
+        run: |
+          $files = Get-ChildItem "src-tauri/target/x86_64-pc-windows-msvc/release/bundle" -Recurse -Include *.exe,*.msi
+          foreach ($file in $files) {
+            Write-Host "Verifying: $($file.FullName)"
+            $sig = Get-AuthenticodeSignature $file.FullName
+            Write-Host "  Status: $($sig.Status)"
+            Write-Host "  Signer: $($sig.SignerCertificate.Subject)"
+          }
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-win-x64
+          path: |
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**/*.exe
+            src-tauri/target/x86_64-pc-windows-msvc/release/bundle/**/*.msi
+          if-no-files-found: error
+          retention-days: 7
