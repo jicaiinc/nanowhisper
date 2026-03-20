@@ -77,6 +77,15 @@ All persisted to `~/.nanowhisper/`:
 - Vite v6 with multi-entry build (main + overlay)
 - Tauri IPC via `@tauri-apps/api` `invoke()` and `listen()`
 
+### App Icons
+
+Logo 源文件在 `src-tauri/logo/`：
+
+- **macOS**: 使用 `appicon.png`（白底圆角），生成 `icons/icon.icns` 及各尺寸 PNG
+- **Windows**: 使用 `appicon0.png`（透明背景），生成 `icons/icon.ico`（需包含 16/32/48/256 多尺寸）
+
+两套图标独立，修改一方不影响另一方。
+
 ### CI/CD
 
 GitHub Actions release workflow (`.github/workflows/release.yml`) triggered by `v*` tags. Builds for macOS ARM64, macOS x64, Linux x64, Windows x64.
