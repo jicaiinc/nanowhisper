@@ -106,29 +106,35 @@ fn macos_cursor_screen_bounds() -> Option<(f64, f64, f64, f64)> {
     None
 }
 
-/// Set NSWindowCollectionBehavior on all floating-level windows
-/// so the overlay appears on all Spaces including fullscreen.
-/// Called synchronously — safe because hotkey callbacks run on the main thread.
+/// Set NSWindowCollectionBehavior on the overlay so it appears on all Spaces
+/// including fullscreen, then show the window.
+/// Dispatched to the main thread (required for AppKit calls).
 #[cfg(target_os = "macos")]
-fn macos_set_overlay_all_spaces() {
+fn macos_configure_and_show_overlay(
+    app_handle: &tauri::AppHandle,
+    window: tauri::WebviewWindow,
+) {
     use objc2::msg_send;
-    use objc2::runtime::{AnyClass, AnyObject};
+    use objc2::runtime::AnyObject;
 
-    unsafe {
-        let Some(cls) = AnyClass::get(c"NSApplication") else { return };
-        let app: *mut AnyObject = msg_send![cls, sharedApplication];
-        let windows: *mut AnyObject = msg_send![app, windows];
-        let count: usize = msg_send![windows, count];
-        for i in 0..count {
-            let w: *mut AnyObject = msg_send![windows, objectAtIndex: i];
-            let level: i64 = msg_send![w, level];
-            if level >= 3 {
-                // Preserve existing flags, add canJoinAllSpaces | fullScreenAuxiliary
-                let existing: u64 = msg_send![w, collectionBehavior];
-                let _: () = msg_send![w, setCollectionBehavior: existing | (1u64 << 0) | (1u64 << 8)];
+    let _ = app_handle.run_on_main_thread(move || {
+        if let Ok(handle) = raw_window_handle::HasWindowHandle::window_handle(&window) {
+            if let raw_window_handle::RawWindowHandle::AppKit(h) = handle.as_raw() {
+                unsafe {
+                    let ns_view = h.ns_view.as_ptr() as *mut AnyObject;
+                    let ns_window: *mut AnyObject = msg_send![ns_view, window];
+                    if !ns_window.is_null() {
+                        let existing: u64 = msg_send![ns_window, collectionBehavior];
+                        let _: () = msg_send![
+                            ns_window,
+                            setCollectionBehavior: existing | (1u64 << 0) | (1u64 << 8)
+                        ];
+                    }
+                }
             }
         }
-    }
+        let _ = window.show();
+    });
 }
 
 pub fn run() {
@@ -424,7 +430,8 @@ fn start_recording(app_handle: &tauri::AppHandle) {
         Ok(w) => {
             log::info!("Overlay window created");
             #[cfg(target_os = "macos")]
-            macos_set_overlay_all_spaces();
+            macos_configure_and_show_overlay(app_handle, w);
+            #[cfg(not(target_os = "macos"))]
             let _ = w.show();
         }
         Err(e) => log::error!("Failed to create overlay: {}", e),

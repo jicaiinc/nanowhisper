@@ -2501,6 +2501,7 @@ dependencies = [
  "log",
  "objc2",
  "objc2-av-foundation",
+ "raw-window-handle",
  "reqwest 0.12.28",
  "rusqlite",
  "rusqlite_migration",

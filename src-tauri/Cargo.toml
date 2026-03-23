@@ -38,6 +38,7 @@ block2 = { version = "0.6.2", default-features = false, features = ["alloc"] }
 core-foundation = "0.10"
 objc2 = { version = "0.6.4", default-features = false, features = ["std"] }
 objc2-av-foundation = { version = "0.3.2", default-features = false, features = ["AVCaptureDevice", "AVMediaFormat", "block2"] }
+raw-window-handle = "0.6"
 
 [profile.release]
 lto = true
