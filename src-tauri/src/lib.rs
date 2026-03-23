@@ -31,6 +31,106 @@ const OVERLAY_HEIGHT: f64 = 48.0;
 const OVERLAY_BOTTOM_OFFSET: f64 = 80.0;
 const PASTE_DELAY_MS: u64 = 350;
 
+fn default_overlay_position(app_handle: &tauri::AppHandle) -> (f64, f64) {
+    #[cfg(target_os = "macos")]
+    if let Some((mx, my, mw, mh)) = macos_cursor_screen_bounds() {
+        return (
+            mx + (mw - OVERLAY_WIDTH) / 2.0,
+            my + mh - OVERLAY_HEIGHT - OVERLAY_BOTTOM_OFFSET,
+        );
+    }
+    if let Some(monitor) = app_handle.primary_monitor().ok().flatten() {
+        let scale = monitor.scale_factor();
+        let mw = monitor.size().width as f64 / scale;
+        let mh = monitor.size().height as f64 / scale;
+        ((mw - OVERLAY_WIDTH) / 2.0, mh - OVERLAY_HEIGHT - OVERLAY_BOTTOM_OFFSET)
+    } else {
+        (400.0, 800.0)
+    }
+}
+
+/// Returns (x, y, width, height) of the screen containing the cursor,
+/// in logical coordinates with top-left origin (Tauri coordinate system).
+#[cfg(target_os = "macos")]
+fn macos_cursor_screen_bounds() -> Option<(f64, f64, f64, f64)> {
+    use objc2::encode::{Encode, Encoding};
+    use objc2::msg_send;
+    use objc2::runtime::{AnyClass, AnyObject};
+
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    struct CGPoint { x: f64, y: f64 }
+    unsafe impl Encode for CGPoint {
+        const ENCODING: Encoding =
+            Encoding::Struct("CGPoint", &[Encoding::Double, Encoding::Double]);
+    }
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    struct CGSize { width: f64, height: f64 }
+    unsafe impl Encode for CGSize {
+        const ENCODING: Encoding =
+            Encoding::Struct("CGSize", &[Encoding::Double, Encoding::Double]);
+    }
+    #[repr(C)]
+    #[derive(Copy, Clone)]
+    struct CGRect { origin: CGPoint, size: CGSize }
+    unsafe impl Encode for CGRect {
+        const ENCODING: Encoding =
+            Encoding::Struct("CGRect", &[CGPoint::ENCODING, CGSize::ENCODING]);
+    }
+
+    unsafe {
+        let mouse: CGPoint = msg_send![AnyClass::get(c"NSEvent")?, mouseLocation];
+        let screens: *mut AnyObject = msg_send![AnyClass::get(c"NSScreen")?, screens];
+        let count: usize = msg_send![screens, count];
+        if count == 0 { return None; }
+
+        // Main screen height for Y-axis flip (macOS bottom-left → Tauri top-left)
+        let main: *mut AnyObject = msg_send![screens, objectAtIndex: 0usize];
+        let main_frame: CGRect = msg_send![main, frame];
+
+        for i in 0..count {
+            let scr: *mut AnyObject = msg_send![screens, objectAtIndex: i];
+            let frame: CGRect = msg_send![scr, frame];
+            if mouse.x >= frame.origin.x
+                && mouse.x < frame.origin.x + frame.size.width
+                && mouse.y >= frame.origin.y
+                && mouse.y < frame.origin.y + frame.size.height
+            {
+                let x = frame.origin.x;
+                let y = main_frame.size.height - frame.origin.y - frame.size.height;
+                return Some((x, y, frame.size.width, frame.size.height));
+            }
+        }
+    }
+    None
+}
+
+/// Set NSWindowCollectionBehavior on all floating-level windows
+/// so the overlay appears on all Spaces including fullscreen.
+/// Called synchronously — safe because hotkey callbacks run on the main thread.
+#[cfg(target_os = "macos")]
+fn macos_set_overlay_all_spaces() {
+    use objc2::msg_send;
+    use objc2::runtime::{AnyClass, AnyObject};
+
+    unsafe {
+        let Some(cls) = AnyClass::get(c"NSApplication") else { return };
+        let app: *mut AnyObject = msg_send![cls, sharedApplication];
+        let windows: *mut AnyObject = msg_send![app, windows];
+        let count: usize = msg_send![windows, count];
+        for i in 0..count {
+            let w: *mut AnyObject = msg_send![windows, objectAtIndex: i];
+            let level: i64 = msg_send![w, level];
+            if level >= 3 {
+                // Preserve existing flags, add canJoinAllSpaces | fullScreenAuxiliary
+                let existing: u64 = msg_send![w, collectionBehavior];
+                let _: () = msg_send![w, setCollectionBehavior: existing | (1u64 << 0) | (1u64 << 8)];
+            }
+        }
+    }
+}
+
 pub fn run() {
     // Load .env file if present (for development)
     let _ = dotenvy::dotenv();
@@ -288,19 +388,11 @@ fn toggle_recording(app_handle: &tauri::AppHandle) {
 fn start_recording(app_handle: &tauri::AppHandle) {
     let recorder = app_handle.state::<Arc<AudioRecorder>>();
 
-    // Use saved overlay position, or default to bottom-center of screen
     let saved = settings::get_settings();
     let (pos_x, pos_y) = if let (Some(x), Some(y)) = (saved.overlay_x, saved.overlay_y) {
         (x, y)
-    } else if let Some(monitor) = app_handle.primary_monitor().ok().flatten() {
-        let scale = monitor.scale_factor();
-        let monitor_width = monitor.size().width as f64 / scale;
-        let monitor_height = monitor.size().height as f64 / scale;
-        let x = (monitor_width - OVERLAY_WIDTH) / 2.0;
-        let y = monitor_height - OVERLAY_HEIGHT - OVERLAY_BOTTOM_OFFSET;
-        (x, y)
     } else {
-        (400.0, 800.0)
+        default_overlay_position(app_handle)
     };
 
     // Hide main window to prevent it from appearing when overlay activates the app
@@ -326,10 +418,14 @@ fn start_recording(app_handle: &tauri::AppHandle) {
     .shadow(false)
     .focused(false)
     .accept_first_mouse(true)
+    .visible(false)
     .build()
     {
-        Ok(_) => {
+        Ok(w) => {
             log::info!("Overlay window created");
+            #[cfg(target_os = "macos")]
+            macos_set_overlay_all_spaces();
+            let _ = w.show();
         }
         Err(e) => log::error!("Failed to create overlay: {}", e),
     }
