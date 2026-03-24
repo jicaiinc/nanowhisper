@@ -236,6 +236,40 @@ jobs:
           TAURI_SIGNING_PRIVATE_KEY_PASSWORD: ${{ secrets.TAURI_SIGNING_PRIVATE_KEY_PASSWORD }}
         run: npx tauri build --target ${{ matrix.target }}
 
+      # ── DMG post-processing ─────────────────────────────────────
+      # Inject a pre-built .DS_Store and hide internal files so the DMG
+      # opens with the correct background/layout regardless of CI Finder state.
+      - name: Post-process macOS DMG
+        if: runner.os == 'macOS'
+        run: |
+          DMG=$(find src-tauri/target/${{ matrix.target }}/release/bundle -name "*.dmg" | head -1)
+          echo "Post-processing: $DMG"
+          RW_DMG="${DMG}.rw.dmg"
+
+          # Convert to read-write
+          hdiutil convert "$DMG" -format UDRW -o "$RW_DMG"
+
+          # Mount read-write
+          DEV_LINE=$(hdiutil attach "$RW_DMG" -readwrite -noverify -noautoopen -nobrowse | grep '/Volumes/')
+          DEV=$(echo "$DEV_LINE" | awk '{print $1}')
+          MOUNT=$(echo "$DEV_LINE" | awk -F'\t' '{print $NF}' | sed 's/^ *//;s/ *$//')
+          echo "Mounted at: $MOUNT"
+
+          # Inject pre-built .DS_Store (reliable view settings without AppleScript)
+          cp src-tauri/dmg-ds-store "$MOUNT/.DS_Store"
+
+          # Hide internal files (invisible even with Cmd+Shift+. enabled)
+          chflags hidden "$MOUNT/.background" "$MOUNT/.VolumeIcon.icns" "$MOUNT/.DS_Store"
+
+          # Unmount
+          hdiutil detach "$DEV"
+
+          # Re-compress, replacing original
+          rm "$DMG"
+          hdiutil convert "$RW_DMG" -format UDZO -imagekey zlib-level=9 -o "$DMG"
+          rm "$RW_DMG"
+          echo "DMG post-processed successfully"
+
       # ── Verification ────────────────────────────────────────────
       - name: Verify macOS code signing
         if: runner.os == 'macOS'
