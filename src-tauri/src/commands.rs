@@ -63,17 +63,50 @@ pub fn request_microphone() -> bool {
 }
 
 #[tauri::command]
-pub async fn validate_api_key(app: AppHandle, api_key: String, provider: String) -> Result<(), String> {
+pub async fn validate_api_key(
+    app: AppHandle,
+    api_key: String,
+    provider: String,
+    custom_base_url: String,
+    model: String,
+) -> Result<(), String> {
     let client = app
         .try_state::<reqwest::Client>()
         .ok_or("HTTP client not initialized")?;
+    let vm = if model.trim().is_empty() {
+        "whisper-1"
+    } else {
+        model.trim()
+    };
     match provider.as_str() {
         "gemini" => crate::transcribe::validate_gemini_api_key(&client, &api_key)
             .await
             .map_err(|e| e.to_string()),
-        _ => crate::transcribe::validate_api_key(&client, &api_key)
-            .await
-            .map_err(|e| e.to_string()),
+        "kimi" => crate::transcribe::validate_openai_compatible_key(
+            &client,
+            "https://api.moonshot.cn/v1",
+            &api_key,
+            vm,
+        )
+        .await
+        .map_err(|e| e.to_string()),
+        "custom" => {
+            let base = custom_base_url.trim();
+            if base.is_empty() {
+                return Err("API base URL is required for custom provider".into());
+            }
+            crate::transcribe::validate_openai_compatible_key(&client, base, &api_key, vm)
+                .await
+                .map_err(|e| e.to_string())
+        }
+        _ => crate::transcribe::validate_openai_compatible_key(
+            &client,
+            "https://api.openai.com/v1",
+            &api_key,
+            vm,
+        )
+        .await
+        .map_err(|e| e.to_string()),
     }
 }
 
@@ -159,9 +192,20 @@ pub async fn retry_transcription(
             .await
             .map_err(|e| e.to_string())?
     } else {
-        transcribe::transcribe_audio(&client, active_key, &settings.model, wav_data, lang)
-            .await
-            .map_err(|e| e.to_string())?
+        let base = crate::settings::openai_compatible_transcription_base(&settings);
+        if settings.provider == "custom" && base.is_empty() {
+            return Err("API base URL is not configured".into());
+        }
+        transcribe::transcribe_openai_compatible(
+            &client,
+            &base,
+            active_key,
+            &settings.model,
+            wav_data,
+            lang,
+        )
+        .await
+        .map_err(|e| e.to_string())?
     };
 
     // Update entry in place (preserves ID and audio_path)

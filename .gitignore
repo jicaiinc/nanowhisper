@@ -6,3 +6,4 @@ src-tauri/target/
 .env
 /.env.bak
 /.mcp.json
+*.dmg

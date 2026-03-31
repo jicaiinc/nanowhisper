@@ -21,10 +21,36 @@ const GEMINI_MODELS = [
   { value: "gemini-3-flash-preview", label: "Gemini 3 Flash" },
   { value: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro" },
 ];
+/** DashScope OpenAI-compatible root (Beijing). */
+const DASHSCOPE_COMPAT_BASE = "https://dashscope.aliyuncs.com/compatible-mode/v1";
+
+/** Kimi / custom provider model dropdown (values sent to API; Rust normalizes Qwen names). */
+const OPENAI_COMPAT_MODEL_OPTIONS: { value: string; label: string }[] = [
+  { value: "Qwen3-ASR-Flash", label: "Qwen3-ASR-Flash" },
+  { value: "qwen3-asr-flash", label: "qwen3-asr-flash" },
+  { value: "whisper-1", label: "whisper-1" },
+  { value: "gpt-4o-transcribe", label: "gpt-4o-transcribe" },
+  { value: "gpt-4o-mini-transcribe", label: "gpt-4o-mini-transcribe" },
+];
+
+const OPENAI_COMPAT_MODEL_KNOWN = new Set(OPENAI_COMPAT_MODEL_OPTIONS.map((o) => o.value));
 const DEFAULT_MODELS: Record<string, string> = {
   openai: "gpt-4o-transcribe",
   gemini: "gemini-3-flash-preview",
+  kimi: "whisper-1",
+  custom: "whisper-1",
 };
+
+function usesGeminiKey(provider: string) {
+  return provider === "gemini";
+}
+
+function apiKeyFieldLabel(provider: string): string {
+  if (provider === "gemini") return "Gemini API Key";
+  if (provider === "kimi") return "Kimi API Key";
+  if (provider === "custom") return "API Key";
+  return "OpenAI API Key";
+}
 
 function displayShortcut(s: string): string {
   if (!s) return defaultHotkey;
@@ -162,7 +188,7 @@ function App() {
   const loadSettings = useCallback(async () => {
     const s = await invoke<AppSettings>("get_settings");
     setSettings(s);
-    const key = s.provider === "gemini" ? s.gemini_api_key : s.api_key;
+    const key = usesGeminiKey(s.provider) ? s.gemini_api_key : s.api_key;
     if (!key) setView("onboarding");
   }, []);
 
@@ -264,12 +290,19 @@ function App() {
     await invoke("save_settings", { settings });
   };
 
-  const testApiKey = async (key: string, provider: string) => {
+  const testApiKey = async () => {
+    if (!settings) return;
+    const key = usesGeminiKey(settings.provider) ? settings.gemini_api_key : settings.api_key;
     if (!key) return;
     setApiKeyStatus("testing");
     setApiKeyError(null);
     try {
-      await invoke("validate_api_key", { apiKey: key, provider });
+      await invoke("validate_api_key", {
+        apiKey: key,
+        provider: settings.provider,
+        customBaseUrl: settings.custom_api_base_url,
+        model: settings.model,
+      });
       setApiKeyStatus("ok");
     } catch (e) {
       setApiKeyStatus("error");
@@ -277,7 +310,7 @@ function App() {
     }
   };
 
-  const activeApiKey = settings ? (settings.provider === "gemini" ? settings.gemini_api_key : settings.api_key) : "";
+  const activeApiKey = settings ? (usesGeminiKey(settings.provider) ? settings.gemini_api_key : settings.api_key) : "";
 
   const formatTime = (ts: number) => {
     const d = new Date(ts * 1000);
@@ -315,7 +348,7 @@ function App() {
 
   // Onboarding
   if (view === "onboarding" && settings) {
-    const canProceed = apiKeyStatus === "ok" && microphoneOk && (isMac ? accessibilityOk : true);
+    const canProceed = apiKeyStatus === "ok" && microphoneOk;
     return (
       <div className="p-6 max-w-md mx-auto">
         <div className="flex flex-col items-center mb-6">
@@ -338,7 +371,11 @@ function App() {
               value={settings.provider}
               onChange={(e) => {
                 const p = e.target.value;
-                setSettings({ ...settings, provider: p, model: DEFAULT_MODELS[p] || "gpt-4o-transcribe" });
+                setSettings({
+                  ...settings,
+                  provider: p,
+                  model: DEFAULT_MODELS[p] ?? "gpt-4o-transcribe",
+                });
                 setApiKeyStatus("untested");
                 setApiKeyError(null);
               }}
@@ -346,9 +383,64 @@ function App() {
               style={{ background: "var(--card)", border: "1px solid var(--border)", color: "var(--text)" }}
             >
               <option value="openai">OpenAI</option>
-              <option value="gemini">Gemini</option>
+              <option value="gemini">Google Gemini</option>
+              <option value="kimi">Kimi (Moonshot)</option>
+              <option value="custom">Custom (OpenAI-compatible)</option>
             </select>
-            {settings.provider === "gemini" ? (
+            {settings.provider === "custom" && (
+              <>
+                <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>API base URL</label>
+                <select
+                  value={
+                    settings.custom_api_base_url.trim() === DASHSCOPE_COMPAT_BASE
+                      ? DASHSCOPE_COMPAT_BASE
+                      : "__custom__"
+                  }
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    const nextUrl =
+                      v === "__custom__"
+                        ? settings.custom_api_base_url.trim() === DASHSCOPE_COMPAT_BASE
+                          ? ""
+                          : settings.custom_api_base_url
+                        : v;
+                    setSettings({ ...settings, custom_api_base_url: nextUrl });
+                    setApiKeyStatus("untested");
+                    setApiKeyError(null);
+                  }}
+                  className="w-full px-3 py-2 rounded-lg text-sm outline-none mb-2"
+                  style={{ background: "var(--card)", border: "1px solid var(--border)", color: "var(--text)" }}
+                >
+                  <option value={DASHSCOPE_COMPAT_BASE}>{DASHSCOPE_COMPAT_BASE}</option>
+                  <option value="__custom__">自定义 URL…</option>
+                </select>
+                {(settings.custom_api_base_url.trim() !== DASHSCOPE_COMPAT_BASE) && (
+                  <input
+                    type="text"
+                    value={settings.custom_api_base_url}
+                    onChange={(e) => {
+                      setSettings({ ...settings, custom_api_base_url: e.target.value });
+                      setApiKeyStatus("untested");
+                      setApiKeyError(null);
+                    }}
+                    placeholder="https://api.example.com/v1"
+                    className="w-full px-3 py-2 rounded-lg text-sm outline-none mb-2 font-mono"
+                    style={{ background: "var(--card)", border: "1px solid var(--border)", color: "var(--text)" }}
+                  />
+                )}
+                <p className="text-xs mb-2" style={{ color: "var(--text-secondary)" }}>
+                  OpenAI-compatible root; DashScope Qwen ASR uses chat/completions. Other vendors may use /audio/transcriptions.
+                </p>
+              </>
+            )}
+            {settings.provider === "kimi" && (
+              <p className="text-xs mb-2" style={{ color: "var(--text-secondary)" }}>
+                Uses <span className="font-mono text-[11px]">https://api.moonshot.cn/v1</span>. For international keys, choose Custom and set{" "}
+                <span className="font-mono text-[11px]">https://api.moonshot.ai/v1</span>.
+              </p>
+            )}
+            <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>{apiKeyFieldLabel(settings.provider)}</label>
+            {usesGeminiKey(settings.provider) ? (
               <input
                 type="password"
                 value={settings.gemini_api_key}
@@ -358,7 +450,7 @@ function App() {
                   setApiKeyError(null);
                 }}
                 placeholder="AIza..."
-                className="w-full px-3 py-2 rounded-lg text-sm outline-none"
+                className="w-full px-3 py-2 rounded-lg text-sm outline-none mb-2"
                 style={{ background: "var(--card)", border: "1px solid var(--border)", color: "var(--text)" }}
               />
             ) : (
@@ -370,20 +462,93 @@ function App() {
                   setApiKeyStatus("untested");
                   setApiKeyError(null);
                 }}
-                placeholder="sk-proj-..."
-                className="w-full px-3 py-2 rounded-lg text-sm outline-none"
+                placeholder={settings.provider === "kimi" ? "Moonshot API key" : settings.provider === "custom" ? "API key" : "sk-proj-..."}
+                className="w-full px-3 py-2 rounded-lg text-sm outline-none mb-2"
                 style={{ background: "var(--card)", border: "1px solid var(--border)", color: "var(--text)" }}
               />
             )}
+            <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Model</label>
+            {settings.provider === "gemini" ? (
+              <select
+                value={settings.model}
+                onChange={(e) => {
+                  setSettings({ ...settings, model: e.target.value });
+                  setApiKeyStatus("untested");
+                  setApiKeyError(null);
+                }}
+                className="w-full px-3 py-2 rounded-lg text-sm outline-none mb-2"
+                style={{ background: "var(--card)", border: "1px solid var(--border)", color: "var(--text)" }}
+              >
+                {GEMINI_MODELS.map((m) => (
+                  <option key={m.value} value={m.value}>{m.label}</option>
+                ))}
+              </select>
+            ) : settings.provider === "openai" ? (
+              <select
+                value={settings.model}
+                onChange={(e) => {
+                  setSettings({ ...settings, model: e.target.value });
+                  setApiKeyStatus("untested");
+                  setApiKeyError(null);
+                }}
+                className="w-full px-3 py-2 rounded-lg text-sm outline-none mb-2"
+                style={{ background: "var(--card)", border: "1px solid var(--border)", color: "var(--text)" }}
+              >
+                {OPENAI_MODELS.map((m) => (
+                  <option key={m.value} value={m.value}>{m.label}</option>
+                ))}
+              </select>
+            ) : (
+              <>
+                <select
+                  value={OPENAI_COMPAT_MODEL_KNOWN.has(settings.model) ? settings.model : "__custom__"}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setSettings({
+                      ...settings,
+                      model:
+                        v === "__custom__"
+                          ? OPENAI_COMPAT_MODEL_KNOWN.has(settings.model)
+                            ? ""
+                            : settings.model
+                          : v,
+                    });
+                    setApiKeyStatus("untested");
+                    setApiKeyError(null);
+                  }}
+                  className="w-full px-3 py-2 rounded-lg text-sm outline-none mb-2"
+                  style={{ background: "var(--card)", border: "1px solid var(--border)", color: "var(--text)" }}
+                >
+                  {OPENAI_COMPAT_MODEL_OPTIONS.map((m) => (
+                    <option key={m.value} value={m.value}>{m.label}</option>
+                  ))}
+                  <option value="__custom__">自定义模型名…</option>
+                </select>
+                {!OPENAI_COMPAT_MODEL_KNOWN.has(settings.model) && (
+                  <input
+                    type="text"
+                    value={settings.model}
+                    onChange={(e) => {
+                      setSettings({ ...settings, model: e.target.value });
+                      setApiKeyStatus("untested");
+                      setApiKeyError(null);
+                    }}
+                    placeholder="e.g. my-model-id"
+                    className="w-full px-3 py-2 rounded-lg text-sm outline-none mb-2 font-mono"
+                    style={{ background: "var(--card)", border: "1px solid var(--border)", color: "var(--text)" }}
+                  />
+                )}
+              </>
+            )}
             <button
-              onClick={() => testApiKey(activeApiKey, settings.provider)}
-              disabled={!activeApiKey || apiKeyStatus === "testing"}
+              onClick={() => testApiKey()}
+              disabled={!activeApiKey || apiKeyStatus === "testing" || (settings.provider === "custom" && !settings.custom_api_base_url.trim())}
               className="w-full mt-2 px-3 py-2 rounded-lg text-sm font-medium"
               style={{
                 background: apiKeyStatus === "ok" ? "#34c75920" : "var(--accent)",
                 color: apiKeyStatus === "ok" ? "#34c759" : "white",
-                cursor: !activeApiKey || apiKeyStatus === "testing" ? "not-allowed" : "pointer",
-                opacity: !activeApiKey || apiKeyStatus === "testing" ? 0.5 : 1,
+                cursor: !activeApiKey || apiKeyStatus === "testing" || (settings.provider === "custom" && !settings.custom_api_base_url.trim()) ? "not-allowed" : "pointer",
+                opacity: !activeApiKey || apiKeyStatus === "testing" || (settings.provider === "custom" && !settings.custom_api_base_url.trim()) ? 0.5 : 1,
               }}
             >
               {apiKeyStatus === "testing" ? "Testing..." : apiKeyStatus === "ok" ? "Connected" : "Test Connection"}
@@ -481,17 +646,74 @@ function App() {
             <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Provider</label>
             <select value={settings.provider} onChange={(e) => {
               const p = e.target.value;
-              setSettings({ ...settings, provider: p, model: DEFAULT_MODELS[p] || "gpt-4o-transcribe" });
+              setSettings({
+                ...settings,
+                provider: p,
+                model: DEFAULT_MODELS[p] ?? "gpt-4o-transcribe",
+              });
               setApiKeyStatus("untested");
               setApiKeyError(null);
             }} className="w-full px-3 py-2 rounded-lg text-sm outline-none" style={{ background: "var(--card)", border: "1px solid var(--border)", color: "var(--text)" }}>
               <option value="openai">OpenAI</option>
-              <option value="gemini">Gemini</option>
+              <option value="gemini">Google Gemini</option>
+              <option value="kimi">Kimi (Moonshot)</option>
+              <option value="custom">Custom (OpenAI-compatible)</option>
             </select>
           </div>
+          {settings.provider === "custom" && (
+            <div>
+              <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>API base URL</label>
+              <select
+                value={
+                  settings.custom_api_base_url.trim() === DASHSCOPE_COMPAT_BASE
+                    ? DASHSCOPE_COMPAT_BASE
+                    : "__custom__"
+                }
+                onChange={(e) => {
+                  const v = e.target.value;
+                  const nextUrl =
+                    v === "__custom__"
+                      ? settings.custom_api_base_url.trim() === DASHSCOPE_COMPAT_BASE
+                        ? ""
+                        : settings.custom_api_base_url
+                      : v;
+                  setSettings({ ...settings, custom_api_base_url: nextUrl });
+                  setApiKeyStatus("untested");
+                  setApiKeyError(null);
+                }}
+                className="w-full px-3 py-2 rounded-lg text-sm outline-none mb-2"
+                style={{ background: "var(--card)", border: "1px solid var(--border)", color: "var(--text)" }}
+              >
+                <option value={DASHSCOPE_COMPAT_BASE}>{DASHSCOPE_COMPAT_BASE}</option>
+                <option value="__custom__">自定义 URL…</option>
+              </select>
+              {(settings.custom_api_base_url.trim() !== DASHSCOPE_COMPAT_BASE) && (
+                <input
+                  type="text"
+                  value={settings.custom_api_base_url}
+                  onChange={(e) => {
+                    setSettings({ ...settings, custom_api_base_url: e.target.value });
+                    setApiKeyStatus("untested");
+                    setApiKeyError(null);
+                  }}
+                  placeholder="https://api.example.com/v1"
+                  className="w-full px-3 py-2 rounded-lg text-sm outline-none font-mono mb-1"
+                  style={{ background: "var(--card)", border: "1px solid var(--border)", color: "var(--text)" }}
+                />
+              )}
+              <p className="text-xs mt-1" style={{ color: "var(--text-secondary)" }}>
+                DashScope Qwen ASR uses chat/completions; other hosts may use /audio/transcriptions.
+              </p>
+            </div>
+          )}
+          {settings.provider === "kimi" && (
+            <p className="text-xs" style={{ color: "var(--text-secondary)" }}>
+              Base <span className="font-mono">https://api.moonshot.cn/v1</span>. International: use Custom with <span className="font-mono">https://api.moonshot.ai/v1</span>.
+            </p>
+          )}
           <div>
-            <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>{settings.provider === "gemini" ? "Gemini API Key" : "OpenAI API Key"}</label>
-            {settings.provider === "gemini" ? (
+            <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>{apiKeyFieldLabel(settings.provider)}</label>
+            {usesGeminiKey(settings.provider) ? (
               <input type="password" value={settings.gemini_api_key} onChange={(e) => {
                 setSettings({ ...settings, gemini_api_key: e.target.value });
                 setApiKeyStatus("untested");
@@ -502,17 +724,17 @@ function App() {
                 setSettings({ ...settings, api_key: e.target.value });
                 setApiKeyStatus("untested");
                 setApiKeyError(null);
-              }} placeholder="sk-..." className="w-full px-3 py-2 rounded-lg text-sm outline-none" style={{ background: "var(--card)", border: "1px solid var(--border)", color: "var(--text)" }} />
+              }} placeholder={settings.provider === "kimi" ? "Moonshot API key" : settings.provider === "custom" ? "API key" : "sk-..."} className="w-full px-3 py-2 rounded-lg text-sm outline-none" style={{ background: "var(--card)", border: "1px solid var(--border)", color: "var(--text)" }} />
             )}
             <button
-              onClick={() => testApiKey(activeApiKey, settings.provider)}
-              disabled={!activeApiKey || apiKeyStatus === "testing"}
+              onClick={() => testApiKey()}
+              disabled={!activeApiKey || apiKeyStatus === "testing" || (settings.provider === "custom" && !settings.custom_api_base_url.trim())}
               className="w-full mt-1.5 px-3 py-1.5 rounded-lg text-xs font-medium"
               style={{
                 background: apiKeyStatus === "ok" ? "#34c75920" : "var(--border)",
                 color: apiKeyStatus === "ok" ? "#34c759" : "var(--text)",
-                cursor: !activeApiKey || apiKeyStatus === "testing" ? "not-allowed" : "pointer",
-                opacity: !activeApiKey || apiKeyStatus === "testing" ? 0.5 : 1,
+                cursor: !activeApiKey || apiKeyStatus === "testing" || (settings.provider === "custom" && !settings.custom_api_base_url.trim()) ? "not-allowed" : "pointer",
+                opacity: !activeApiKey || apiKeyStatus === "testing" || (settings.provider === "custom" && !settings.custom_api_base_url.trim()) ? 0.5 : 1,
               }}
             >
               {apiKeyStatus === "testing" ? "Testing..." : apiKeyStatus === "ok" ? "Connected" : "Test Connection"}
@@ -523,11 +745,54 @@ function App() {
           </div>
           <div>
             <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Model</label>
-            <select value={settings.model} onChange={(e) => setSettings({ ...settings, model: e.target.value })} className="w-full px-3 py-2 rounded-lg text-sm outline-none" style={{ background: "var(--card)", border: "1px solid var(--border)", color: "var(--text)" }}>
-              {(settings.provider === "gemini" ? GEMINI_MODELS : OPENAI_MODELS).map((m) => (
-                <option key={m.value} value={m.value}>{m.label}</option>
-              ))}
-            </select>
+            {settings.provider === "gemini" ? (
+              <select value={settings.model} onChange={(e) => setSettings({ ...settings, model: e.target.value })} className="w-full px-3 py-2 rounded-lg text-sm outline-none" style={{ background: "var(--card)", border: "1px solid var(--border)", color: "var(--text)" }}>
+                {GEMINI_MODELS.map((m) => (
+                  <option key={m.value} value={m.value}>{m.label}</option>
+                ))}
+              </select>
+            ) : settings.provider === "openai" ? (
+              <select value={settings.model} onChange={(e) => setSettings({ ...settings, model: e.target.value })} className="w-full px-3 py-2 rounded-lg text-sm outline-none" style={{ background: "var(--card)", border: "1px solid var(--border)", color: "var(--text)" }}>
+                {OPENAI_MODELS.map((m) => (
+                  <option key={m.value} value={m.value}>{m.label}</option>
+                ))}
+              </select>
+            ) : (
+              <>
+                <select
+                  value={OPENAI_COMPAT_MODEL_KNOWN.has(settings.model) ? settings.model : "__custom__"}
+                  onChange={(e) => {
+                    const v = e.target.value;
+                    setSettings({
+                      ...settings,
+                      model:
+                        v === "__custom__"
+                          ? OPENAI_COMPAT_MODEL_KNOWN.has(settings.model)
+                            ? ""
+                            : settings.model
+                          : v,
+                    });
+                  }}
+                  className="w-full px-3 py-2 rounded-lg text-sm outline-none mb-2"
+                  style={{ background: "var(--card)", border: "1px solid var(--border)", color: "var(--text)" }}
+                >
+                  {OPENAI_COMPAT_MODEL_OPTIONS.map((m) => (
+                    <option key={m.value} value={m.value}>{m.label}</option>
+                  ))}
+                  <option value="__custom__">自定义模型名…</option>
+                </select>
+                {!OPENAI_COMPAT_MODEL_KNOWN.has(settings.model) && (
+                  <input
+                    type="text"
+                    value={settings.model}
+                    onChange={(e) => setSettings({ ...settings, model: e.target.value })}
+                    placeholder="e.g. my-model-id"
+                    className="w-full px-3 py-2 rounded-lg text-sm outline-none font-mono"
+                    style={{ background: "var(--card)", border: "1px solid var(--border)", color: "var(--text)" }}
+                  />
+                )}
+              </>
+            )}
           </div>
           <div>
             <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Language</label>

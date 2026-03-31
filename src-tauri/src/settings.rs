@@ -9,6 +9,9 @@ pub struct AppSettings {
     pub api_key: String,
     #[serde(default)]
     pub gemini_api_key: String,
+    /// OpenAI-compatible API base (e.g. `https://api.example.com/v1`). Used when `provider` is `custom`.
+    #[serde(default = "default_custom_api_base_url")]
+    pub custom_api_base_url: String,
     #[serde(default = "default_model")]
     pub model: String,
     #[serde(default = "default_language")]
@@ -29,6 +32,9 @@ fn default_provider() -> String {
 fn default_api_key() -> String {
     String::new()
 }
+fn default_custom_api_base_url() -> String {
+    "https://api.openai.com/v1".to_string()
+}
 fn default_model() -> String {
     "gpt-4o-transcribe".to_string()
 }
@@ -48,6 +54,7 @@ impl Default for AppSettings {
             provider: default_provider(),
             api_key: default_api_key(),
             gemini_api_key: String::new(),
+            custom_api_base_url: default_custom_api_base_url(),
             model: default_model(),
             language: default_language(),
             shortcut: default_shortcut(),
@@ -67,6 +74,15 @@ pub fn get_settings() -> AppSettings {
     match std::fs::read_to_string(&path) {
         Ok(content) => serde_json::from_str::<AppSettings>(&content).unwrap_or_default(),
         Err(_) => AppSettings::default(),
+    }
+}
+
+/// Base URL for OpenAI-style `/v1/audio/transcriptions` (no trailing path segment).
+pub fn openai_compatible_transcription_base(settings: &AppSettings) -> String {
+    match settings.provider.as_str() {
+        "kimi" => "https://api.moonshot.cn/v1".to_string(),
+        "custom" => settings.custom_api_base_url.trim().trim_end_matches('/').to_string(),
+        _ => "https://api.openai.com/v1".to_string(),
     }
 }
 
