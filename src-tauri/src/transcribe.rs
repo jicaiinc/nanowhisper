@@ -2,18 +2,165 @@ use anyhow::{Context, Result};
 use base64::Engine;
 use reqwest::multipart;
 
-/// Validate API key by sending a tiny silent WAV to the transcription endpoint.
-pub async fn validate_api_key(client: &reqwest::Client, api_key: &str) -> Result<()> {
+/// Alibaba DashScope OpenAI-compatible ASR (Qwen3-ASR, etc.) uses `chat/completions` + `input_audio`, not Whisper multipart.
+fn is_dashscope_compatible_asr_base(base_url: &str) -> bool {
+    let lower = base_url.to_ascii_lowercase();
+    lower.contains("dashscope") && lower.contains("compatible-mode")
+}
+
+fn chat_completions_url(base_url: &str) -> String {
+    let b = base_url.trim().trim_end_matches('/');
+    if b.ends_with("/chat/completions") {
+        b.to_string()
+    } else {
+        format!("{}/chat/completions", b)
+    }
+}
+
+/// Normalize user-facing names like `Qwen3-ASR-Flash` to API id `qwen3-asr-flash`.
+fn normalize_qwen_asr_model(model: &str) -> String {
+    let t = model.trim();
+    if t.is_empty() {
+        return "qwen3-asr-flash".to_string();
+    }
+    t.to_ascii_lowercase().replace('_', "-")
+}
+
+fn dashscope_asr_request_body(
+    model: &str,
+    wav_data: &[u8],
+    language: Option<&str>,
+) -> serde_json::Value {
+    let b64 = base64::engine::general_purpose::STANDARD.encode(wav_data);
+    let data_uri = format!("data:audio/wav;base64,{}", b64);
+
+    let mut body = serde_json::json!({
+        "model": normalize_qwen_asr_model(model),
+        "messages": [{
+            "role": "user",
+            "content": [{
+                "type": "input_audio",
+                "input_audio": { "data": data_uri }
+            }]
+        }]
+    });
+
+    if let Some(lang) = language {
+        if lang != "auto" {
+            body.as_object_mut().unwrap().insert(
+                "asr_options".to_string(),
+                serde_json::json!({ "language": lang }),
+            );
+        }
+    }
+
+    body
+}
+
+fn parse_dashscope_chat_completion_text(json: &serde_json::Value) -> Result<String> {
+    if let Some(msg) = json["error"]["message"].as_str() {
+        anyhow::bail!("{}", msg);
+    }
+    let content = &json["choices"][0]["message"]["content"];
+    let text = if let Some(s) = content.as_str() {
+        s.to_string()
+    } else if let Some(arr) = content.as_array() {
+        arr.iter()
+            .filter_map(|p| p["text"].as_str())
+            .collect::<Vec<_>>()
+            .join("")
+    } else {
+        anyhow::bail!("Unexpected chat/completions response shape");
+    };
+    let t = text.trim();
+    if t.is_empty() {
+        anyhow::bail!("Empty transcription in response");
+    }
+    Ok(t.to_string())
+}
+
+async fn transcribe_dashscope_qwen_asr(
+    client: &reqwest::Client,
+    base_url: &str,
+    api_key: &str,
+    model: &str,
+    wav_data: Vec<u8>,
+    language: Option<&str>,
+) -> Result<String> {
+    let url = chat_completions_url(base_url);
+    let body = dashscope_asr_request_body(model, &wav_data, language);
+
+    let resp = client
+        .post(&url)
+        .bearer_auth(api_key)
+        .header("Content-Type", "application/json")
+        .json(&body)
+        .send()
+        .await
+        .context("Failed to send DashScope ASR request")?;
+
+    if !resp.status().is_success() {
+        let status = resp.status();
+        let body = resp.text().await.unwrap_or_default();
+        anyhow::bail!("DashScope API error {}: {}", status, body);
+    }
+
+    let json: serde_json::Value = resp.json().await.context("Failed to parse API response")?;
+    parse_dashscope_chat_completion_text(&json)
+}
+
+fn transcription_endpoint_url(base_url: &str) -> String {
+    let b = base_url.trim().trim_end_matches('/');
+    if b.ends_with("/audio/transcriptions") {
+        b.to_string()
+    } else {
+        format!("{}/audio/transcriptions", b)
+    }
+}
+
+/// Validate API key against an OpenAI-compatible transcription endpoint.
+pub async fn validate_openai_compatible_key(
+    client: &reqwest::Client,
+    base_url: &str,
+    api_key: &str,
+    model: &str,
+) -> Result<()> {
     let wav = generate_silent_wav();
+
+    if is_dashscope_compatible_asr_base(base_url) {
+        let url = chat_completions_url(base_url);
+        let body = dashscope_asr_request_body(model, &wav, None);
+        let resp = client
+            .post(&url)
+            .bearer_auth(api_key)
+            .header("Content-Type", "application/json")
+            .json(&body)
+            .send()
+            .await
+            .context("Network error")?;
+
+        if resp.status() == 401 {
+            anyhow::bail!("Invalid API key");
+        }
+        if !resp.status().is_success() {
+            let body = resp.text().await.unwrap_or_default();
+            anyhow::bail!("{}", body);
+        }
+        let json: serde_json::Value = resp.json().await.unwrap_or_default();
+        let _ = parse_dashscope_chat_completion_text(&json)?;
+        return Ok(());
+    }
+
     let file_part = multipart::Part::bytes(wav)
         .file_name("test.wav")
         .mime_str("audio/wav")?;
     let form = multipart::Form::new()
         .part("file", file_part)
-        .text("model", "whisper-1".to_string());
+        .text("model", model.to_string());
 
+    let url = transcription_endpoint_url(base_url);
     let resp = client
-        .post("https://api.openai.com/v1/audio/transcriptions")
+        .post(&url)
         .bearer_auth(api_key)
         .multipart(form)
         .send()
@@ -28,6 +175,11 @@ pub async fn validate_api_key(client: &reqwest::Client, api_key: &str) -> Result
         anyhow::bail!("{}", body);
     }
     Ok(())
+}
+
+/// Validate OpenAI API key (default cloud endpoint).
+pub async fn validate_api_key(client: &reqwest::Client, api_key: &str) -> Result<()> {
+    validate_openai_compatible_key(client, "https://api.openai.com/v1", api_key, "whisper-1").await
 }
 
 /// Generate a minimal valid WAV file (0.5s silence, 16kHz mono 16-bit).
@@ -54,13 +206,27 @@ fn generate_silent_wav() -> Vec<u8> {
     buf
 }
 
-pub async fn transcribe_audio(
+/// Transcribe via OpenAI-compatible `POST .../audio/transcriptions` (multipart).
+pub async fn transcribe_openai_compatible(
     client: &reqwest::Client,
+    base_url: &str,
     api_key: &str,
     model: &str,
     wav_data: Vec<u8>,
     language: Option<&str>,
 ) -> Result<String> {
+    if is_dashscope_compatible_asr_base(base_url) {
+        return transcribe_dashscope_qwen_asr(
+            client,
+            base_url,
+            api_key,
+            model,
+            wav_data,
+            language,
+        )
+        .await;
+    }
+
     let file_part = multipart::Part::bytes(wav_data)
         .file_name("audio.wav")
         .mime_str("audio/wav")?;
@@ -75,8 +241,9 @@ pub async fn transcribe_audio(
         }
     }
 
+    let url = transcription_endpoint_url(base_url);
     let resp = client
-        .post("https://api.openai.com/v1/audio/transcriptions")
+        .post(&url)
         .bearer_auth(api_key)
         .multipart(form)
         .send()
@@ -96,6 +263,24 @@ pub async fn transcribe_audio(
         .to_string();
 
     Ok(text)
+}
+
+pub async fn transcribe_audio(
+    client: &reqwest::Client,
+    api_key: &str,
+    model: &str,
+    wav_data: Vec<u8>,
+    language: Option<&str>,
+) -> Result<String> {
+    transcribe_openai_compatible(
+        client,
+        "https://api.openai.com/v1",
+        api_key,
+        model,
+        wav_data,
+        language,
+    )
+    .await
 }
 
 // ── Google Gemini (generateContent) ─────────────────────────────────

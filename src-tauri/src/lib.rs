@@ -177,8 +177,12 @@ pub fn run() {
             let recorder = Arc::new(AudioRecorder::new());
             app.manage(recorder.clone());
 
-            // Initialize shared HTTP client
-            let http_client = reqwest::Client::new();
+            // Initialize shared HTTP client (timeouts so Test Connection cannot hang forever)
+            let http_client = reqwest::Client::builder()
+                .connect_timeout(std::time::Duration::from_secs(20))
+                .timeout(std::time::Duration::from_secs(180))
+                .build()
+                .unwrap_or_else(|_| reqwest::Client::new());
             app.manage(http_client);
 
             // Initialize enigo if accessibility is already granted
@@ -269,6 +273,9 @@ pub fn run() {
             log::info!("App started. Provider: {}, Shortcut: {}", settings.provider, settings.shortcut);
             let active_key_set = if settings.provider == "gemini" {
                 !settings.gemini_api_key.is_empty()
+            } else if settings.provider == "custom" {
+                !settings.api_key.is_empty()
+                    && !settings.custom_api_base_url.trim().is_empty()
             } else {
                 !settings.api_key.is_empty()
             };
@@ -531,6 +538,17 @@ fn stop_and_transcribe(app_handle: &tauri::AppHandle) {
         return;
     }
 
+    let openai_base = settings::openai_compatible_transcription_base(&settings);
+    if settings.provider == "custom" && openai_base.is_empty() {
+        log::error!("Custom API base URL not configured!");
+        close_overlay(app_handle);
+        if let Some(w) = app_handle.get_webview_window("main") {
+            let _ = w.show();
+            let _ = w.set_focus();
+        }
+        return;
+    }
+
     let handle = app_handle.clone();
     let history = history.inner().clone();
     let model = settings.model.clone();
@@ -555,7 +573,15 @@ fn stop_and_transcribe(app_handle: &tauri::AppHandle) {
         let result = if is_gemini {
             transcribe::transcribe_gemini(&http_client, &active_key, &model, wav_data, lang).await
         } else {
-            transcribe::transcribe_audio(&http_client, &active_key, &model, wav_data, lang).await
+            transcribe::transcribe_openai_compatible(
+                &http_client,
+                &openai_base,
+                &active_key,
+                &model,
+                wav_data,
+                lang,
+            )
+            .await
         };
 
         match result {
