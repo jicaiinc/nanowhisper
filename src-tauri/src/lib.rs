@@ -111,31 +111,14 @@ fn macos_cursor_screen_bounds() -> Option<(f64, f64, f64, f64)> {
     None
 }
 
-/// Convert the overlay to an NSPanel so it never steals focus from other apps.
-/// Also sets collection behavior to appear on all Spaces.
+/// Set NSWindowCollectionBehavior on the overlay so it appears on all Spaces.
+/// Called after window is already visible (no show/focus side effects).
 #[cfg(target_os = "macos")]
-fn macos_setup_overlay_panel(app_handle: &tauri::AppHandle, window: tauri::WebviewWindow) {
+fn macos_set_overlay_all_spaces(app_handle: &tauri::AppHandle, window: tauri::WebviewWindow) {
+    use objc2::msg_send;
+    use objc2::runtime::AnyObject;
+
     let _ = app_handle.run_on_main_thread(move || {
-        use tauri_nspanel::WebviewWindowExt;
-
-        // Swizzle NSWindow → NSPanel, then configure as non-activating
-        match window.to_panel() {
-            Ok(panel) => {
-                // NSWindowStyleMaskNonactivatingPanel (1 << 7):
-                // panel won't activate the owning app when shown
-                panel.set_style_mask(1 << 7);
-                // NSPanel defaults releasedWhenClosed=YES; disable to let Tauri manage lifecycle
-                panel.set_released_when_closed(false);
-                // Keep overlay visible when another app is active
-                panel.set_hides_on_deactivate(false);
-            }
-            Err(e) => log::error!("Failed to convert overlay to NSPanel: {}", e),
-        }
-
-        // Set collection behavior: visible on all Spaces + fullscreen auxiliary
-        use objc2::msg_send;
-        use objc2::runtime::AnyObject;
-
         if let Ok(handle) = raw_window_handle::HasWindowHandle::window_handle(&window) {
             if let raw_window_handle::RawWindowHandle::AppKit(h) = handle.as_raw() {
                 unsafe {
@@ -158,16 +141,11 @@ pub fn run() {
     // Load .env file if present (for development)
     let _ = dotenvy::dotenv();
 
-    let builder = tauri::Builder::default()
+    tauri::Builder::default()
         .plugin(tauri_plugin_clipboard_manager::init())
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_global_shortcut::Builder::new().build())
-        .plugin(tauri_plugin_updater::Builder::new().build());
-
-    #[cfg(target_os = "macos")]
-    let builder = builder.plugin(tauri_nspanel::init());
-
-    builder
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .invoke_handler(tauri::generate_handler![
             commands::get_history,
             commands::delete_history_entry,
@@ -463,7 +441,7 @@ fn start_recording(app_handle: &tauri::AppHandle) {
         Ok(w) => {
             log::info!("Overlay window created");
             #[cfg(target_os = "macos")]
-            macos_setup_overlay_panel(app_handle, w);
+            macos_set_overlay_all_spaces(app_handle, w);
         }
         Err(e) => log::error!("Failed to create overlay: {}", e),
     }
