@@ -71,7 +71,12 @@ pub async fn transcribe_audio(
 
     if let Some(lang) = language {
         if lang != "auto" {
-            form = form.text("language", lang.to_string());
+            // OpenAI only accepts ISO 639-1 codes; map zh-Hans/zh-Hant to zh
+            let code = match lang {
+                "zh-Hans" | "zh-Hant" => "zh",
+                other => other,
+            };
+            form = form.text("language", code.to_string());
         }
     }
 
@@ -221,6 +226,8 @@ pub async fn transcribe_gemini(
 fn language_code_to_name(code: &str) -> &str {
     match code {
         "zh" => "Chinese",
+        "zh-Hans" => "Simplified Chinese",
+        "zh-Hant" => "Traditional Chinese",
         "en" => "English",
         "ja" => "Japanese",
         "ko" => "Korean",

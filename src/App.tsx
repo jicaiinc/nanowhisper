@@ -533,7 +533,8 @@ function App() {
             <label className="block text-xs mb-1" style={{ color: "var(--text-secondary)" }}>Language</label>
             <select value={settings.language} onChange={(e) => setSettings({ ...settings, language: e.target.value })} className="w-full px-3 py-2 rounded-lg text-sm outline-none" style={{ background: "var(--card)", border: "1px solid var(--border)", color: "var(--text)" }}>
               <option value="auto">Auto Detect</option>
-              <option value="zh">Chinese</option>
+              <option value="zh-Hans">Chinese (Simplified)</option>
+              <option value="zh-Hant">Chinese (Traditional)</option>
               <option value="en">English</option>
               <option value="ja">Japanese</option>
               <option value="ko">Korean</option>
