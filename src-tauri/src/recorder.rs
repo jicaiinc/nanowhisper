@@ -217,6 +217,46 @@ fn build_stream<T: Sample + cpal::SizedSample + Send + 'static>(
     Ok(stream)
 }
 
+const TARGET_SAMPLE_RATE: u32 = 16000;
+
+/// Downsample audio to 16kHz (native rate for both Whisper and Gemini).
+/// Uses linear interpolation, which is sufficient for speech-to-text input.
+pub fn downsample_audio(audio: RecordedAudio) -> RecordedAudio {
+    if audio.sample_rate <= TARGET_SAMPLE_RATE {
+        return audio;
+    }
+
+    let ratio = audio.sample_rate as f64 / TARGET_SAMPLE_RATE as f64;
+    let output_len = (audio.samples.len() as f64 / ratio) as usize;
+    let mut output = Vec::with_capacity(output_len);
+
+    for i in 0..output_len {
+        let src_idx = i as f64 * ratio;
+        let idx = src_idx as usize;
+        let frac = (src_idx - idx as f64) as f32;
+
+        let sample = if idx + 1 < audio.samples.len() {
+            audio.samples[idx] * (1.0 - frac) + audio.samples[idx + 1] * frac
+        } else {
+            audio.samples[idx]
+        };
+        output.push(sample);
+    }
+
+    log::info!(
+        "Downsampled {}Hz -> {}Hz ({} -> {} samples)",
+        audio.sample_rate,
+        TARGET_SAMPLE_RATE,
+        audio.samples.len(),
+        output.len()
+    );
+
+    RecordedAudio {
+        samples: output,
+        sample_rate: TARGET_SAMPLE_RATE,
+    }
+}
+
 pub fn encode_wav(audio: &RecordedAudio) -> Result<Vec<u8>> {
     let spec = hound::WavSpec {
         channels: 1,

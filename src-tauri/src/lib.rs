@@ -10,7 +10,7 @@ mod transcribe;
 mod updater;
 
 use history::HistoryManager;
-use recorder::{encode_wav, AudioRecorder};
+use recorder::{downsample_audio, encode_wav, AudioRecorder};
 use settings::AppSettings;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -492,6 +492,10 @@ fn stop_and_transcribe(app_handle: &tauri::AppHandle) {
 
     let sample_count = audio.samples.len();
     let sample_rate = audio.sample_rate;
+
+    // Downsample to 16kHz — native rate for both Whisper and Gemini,
+    // reduces WAV size ~3x with zero quality loss for transcription.
+    let audio = downsample_audio(audio);
 
     let wav_data = match encode_wav(&audio) {
         Ok(d) => d,
