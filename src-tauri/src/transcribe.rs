@@ -196,6 +196,10 @@ pub async fn transcribe_gemini(
     let b64 = base64::engine::general_purpose::STANDARD.encode(&wav_data);
 
     let prompt = match language {
+        // Gemini has no language param for audio; it tends to drift to
+        // Traditional characters on Mandarin audio unless the output
+        // script is an explicit hard requirement in the prompt.
+        Some("zh-Hans") => "Transcribe the following audio. Output only the transcribed text, nothing else. Use Simplified Chinese (简体中文). Do NOT use Traditional Chinese characters.".to_string(),
         Some(lang) if lang != "auto" => {
             let lang_name = language_code_to_name(lang);
             format!(
