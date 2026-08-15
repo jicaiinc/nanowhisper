@@ -18,6 +18,7 @@ const OPENAI_MODELS = [
   { value: "whisper-1", label: "whisper-1" },
 ];
 const GEMINI_MODELS = [
+  { value: "gemini-3.7-flash", label: "Gemini 3.7 Flash" },
   { value: "gemini-3.6-flash", label: "Gemini 3.6 Flash" },
   { value: "gemini-3-flash-preview", label: "Gemini 3 Flash" },
   { value: "gemini-3.1-pro-preview", label: "Gemini 3.1 Pro" },
