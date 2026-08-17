@@ -246,17 +246,20 @@ pub async fn transcribe_gemini(
         anyhow::bail!("Gemini blocked the request: {}", reason);
     }
 
-    // Concatenate all text parts from the first candidate
+    // Gemini 3.7 Flash sometimes leaks its chain-of-thought as an extra
+    // leading text part with thought=false (verified 2026-08-17); the clean
+    // transcript is always the last part. Skip thought parts, take the last.
     let text = json["candidates"][0]["content"]["parts"]
         .as_array()
-        .map(|parts| {
+        .and_then(|parts| {
             parts
                 .iter()
+                .filter(|p| !p["thought"].as_bool().unwrap_or(false))
                 .filter_map(|p| p["text"].as_str())
-                .collect::<Vec<_>>()
-                .join("")
+                .last()
         })
-        .unwrap_or_default();
+        .unwrap_or_default()
+        .to_string();
 
     if text.is_empty() {
         anyhow::bail!("Gemini returned empty transcription");
