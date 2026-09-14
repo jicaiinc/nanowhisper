@@ -412,6 +412,10 @@ fn start_recording(app_handle: &tauri::AppHandle) {
 
     let saved = settings::get_settings();
 
+    // Tell the main window to stop any history playback before the mic opens,
+    // otherwise speaker output would be captured into the new recording.
+    let _ = app_handle.emit("recording-started", ());
+
     // Hide main window to prevent it from appearing when overlay activates the app
     if let Some(w) = app_handle.get_webview_window("main") {
         let _ = w.hide();

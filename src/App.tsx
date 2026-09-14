@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback, useRef } from "react";
-import { invoke } from "@tauri-apps/api/core";
+import { useState, useEffect, useCallback, useRef, memo } from "react";
+import { invoke, convertFileSrc } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { writeText } from "@tauri-apps/plugin-clipboard-manager";
 import type { HistoryEntry, AppSettings, StorageStats } from "./types";
@@ -332,6 +332,217 @@ function ShortcutInput({ shortcut, onCapture }: { shortcut: string; onCapture: (
   );
 }
 
+const formatTime = (ts: number) => {
+  const d = new Date(ts * 1000);
+  const now = new Date();
+  if (d.toDateString() === now.toDateString()) {
+    return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  }
+  return d.toLocaleDateString([], { month: "short", day: "numeric" }) +
+    " " + d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+};
+
+const formatDuration = (ms: number | null) => {
+  if (!ms) return "";
+  const secs = Math.round(ms / 1000);
+  if (secs < 60) return `${secs}s`;
+  const mins = Math.floor(secs / 60);
+  const remainSecs = secs % 60;
+  return `${mins}m${remainSecs}s`;
+};
+
+const formatClock = (secs: number) => {
+  const s = Math.max(0, Math.floor(secs));
+  return `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+};
+
+// Module-level so its identity is stable across App renders (defining it inside App made
+// React remount every button on each render).
+const IconBtn = ({ onClick, title, children, accent }: { onClick: () => void; title: string; children: React.ReactNode; accent?: boolean }) => (
+  <button
+    onClick={onClick}
+    title={title}
+    className="p-1.5 rounded-md"
+    style={{
+      background: accent ? "var(--accent)" : "transparent",
+      color: accent ? "white" : "var(--text-secondary)",
+      lineHeight: 0,
+    }}
+  >
+    {children}
+  </button>
+);
+
+// Draggable seek bar for the shared <audio>. Owns the high-frequency time state so
+// timeupdate (4x/s) re-renders only this small component, not the whole history list.
+// While dragging only the label follows the thumb; the real seek happens once on release,
+// because every currentTime write triggers a new range request through the asset protocol.
+function SeekBar({ audio }: { audio: HTMLAudioElement }) {
+  const safeDuration = () => (Number.isFinite(audio.duration) ? audio.duration : 0);
+  const [time, setTime] = useState(audio.currentTime);
+  const [duration, setDuration] = useState(safeDuration);
+  const draggingRef = useRef(false);
+
+  useEffect(() => {
+    const onTime = () => { if (!draggingRef.current) setTime(audio.currentTime); };
+    const onMeta = () => setDuration(safeDuration());
+    const onEmptied = () => { setTime(0); setDuration(0); };
+    audio.addEventListener("timeupdate", onTime);
+    audio.addEventListener("seeked", onTime);
+    audio.addEventListener("loadedmetadata", onMeta);
+    audio.addEventListener("durationchange", onMeta);
+    audio.addEventListener("emptied", onEmptied);
+    onMeta();
+    onTime();
+    return () => {
+      audio.removeEventListener("timeupdate", onTime);
+      audio.removeEventListener("seeked", onTime);
+      audio.removeEventListener("loadedmetadata", onMeta);
+      audio.removeEventListener("durationchange", onMeta);
+      audio.removeEventListener("emptied", onEmptied);
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [audio]);
+
+  const commit = (secs: number) => {
+    audio.currentTime = secs;
+    setTime(secs);
+  };
+
+  return (
+    <div className="flex items-center gap-2 mt-2">
+      <input
+        type="range"
+        className="seek flex-1"
+        min={0}
+        max={duration || 0}
+        step={0.01}
+        value={Math.min(time, duration || 0)}
+        onPointerDown={() => { draggingRef.current = true; }}
+        onPointerUp={(e) => { draggingRef.current = false; commit(Number(e.currentTarget.value)); }}
+        onPointerCancel={() => { draggingRef.current = false; }}
+        onChange={(e) => {
+          const v = Number(e.target.value);
+          if (draggingRef.current) setTime(v); // keyboard arrows arrive without pointerdown and commit directly
+          else commit(v);
+        }}
+        aria-label="Playback position"
+      />
+      <span className="text-xs tabular-nums" style={{ color: "var(--text-secondary)", minWidth: 76, textAlign: "right" }}>
+        {formatClock(time)} / {formatClock(duration)}
+      </span>
+    </div>
+  );
+}
+
+// One history row. Memoized so a playback state change re-renders only the affected rows,
+// not all of them (the list is unvirtualized and can hold thousands of entries).
+const HistoryCard = memo(function HistoryCard({
+  entry,
+  expanded,
+  copied,
+  retrying,
+  playing,
+  audio,
+  onToggleExpand,
+  onCopy,
+  onPlay,
+  onRetry,
+  onDelete,
+}: {
+  entry: HistoryEntry;
+  expanded: boolean;
+  copied: boolean;
+  retrying: boolean;
+  playing: boolean;
+  audio: HTMLAudioElement | null; // non-null only for the entry currently loaded in the player
+  onToggleExpand: (id: number) => void;
+  onCopy: (text: string, id: number) => void;
+  onPlay: (entry: HistoryEntry) => void;
+  onRetry: (id: number) => void;
+  onDelete: (id: number) => void;
+}) {
+  const isFailed = entry.text.startsWith("[Error:");
+  return (
+    <div className="rounded-lg p-3" style={{ background: "var(--card)", border: isFailed ? "1px solid #ff453a40" : "1px solid var(--border)" }}>
+      {isFailed ? (
+        <div className="text-xs" style={{ color: "#ff453a" }}>
+          {entry.text.slice(1, -1)}
+        </div>
+      ) : (
+      <div
+        className="text-sm cursor-pointer"
+        onClick={() => onToggleExpand(entry.id)}
+        style={{ userSelect: "text" }}
+      >
+        {expanded
+          ? entry.text
+          : entry.text.length > 100
+            ? entry.text.slice(0, 100) + "..."
+            : entry.text}
+      </div>
+      )}
+      {audio && <SeekBar audio={audio} />}
+      <div className="flex items-center justify-between mt-2">
+        <div className="flex items-center gap-2">
+          {entry.duration_ms ? (
+            <span className="text-xs font-medium px-1.5 py-0.5 rounded" style={{ background: "var(--border)", color: "var(--text)" }}>
+              {formatDuration(entry.duration_ms)}
+            </span>
+          ) : null}
+          <span className="text-xs" style={{ color: "var(--text-secondary)" }}>
+            {formatTime(entry.started_at ? Math.floor(entry.started_at / 1000) : entry.timestamp)}
+          </span>
+        </div>
+        <div className="flex gap-0.5">
+          {!isFailed && (
+          <IconBtn onClick={() => onCopy(entry.text, entry.id)} title="Copy" accent={copied}>
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <rect x="9" y="9" width="13" height="13" rx="2" />
+              <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
+            </svg>
+          </IconBtn>
+          )}
+          {entry.audio_path && (
+            <IconBtn onClick={() => onPlay(entry)} title={playing ? "Pause" : "Play"} accent={playing}>
+              {playing ? (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                  <rect x="6" y="4" width="4" height="16" rx="1" />
+                  <rect x="14" y="4" width="4" height="16" rx="1" />
+                </svg>
+              ) : (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M7 4.5v15a1 1 0 0 0 1.52.85l12-7.5a1 1 0 0 0 0-1.7l-12-7.5A1 1 0 0 0 7 4.5z" />
+                </svg>
+              )}
+            </IconBtn>
+          )}
+          {entry.audio_path && (
+            <IconBtn onClick={() => onRetry(entry.id)} title="Retry">
+              {retrying ? (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ animation: "spin 1s linear infinite" }}>
+                  <path d="M21 12a9 9 0 1 1-6.219-8.56" />
+                </svg>
+              ) : (
+                <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                  <polyline points="23 4 23 10 17 10" />
+                  <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
+                </svg>
+              )}
+            </IconBtn>
+          )}
+          <IconBtn onClick={() => onDelete(entry.id)} title="Delete">
+            <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+              <polyline points="3 6 5 6 21 6" />
+              <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
+            </svg>
+          </IconBtn>
+        </div>
+      </div>
+    </div>
+  );
+});
+
 function App() {
   const [view, setView] = useState<View>("history");
   const [history, setHistory] = useState<HistoryEntry[]>([]);
@@ -349,6 +560,66 @@ function App() {
   const [storageStats, setStorageStats] = useState<StorageStats | null>(null);
   const [confirmClear, setConfirmClear] = useState(false);
   const [clearing, setClearing] = useState(false);
+
+  // Playback of saved recordings: one shared <audio>, served via Tauri asset protocol.
+  // Only low-frequency state lives here; per-frame time updates stay inside <SeekBar>.
+  const audioRef = useRef<HTMLAudioElement | null>(null);
+  const [audioId, setAudioId] = useState<number | null>(null);
+  const audioIdRef = useRef<number | null>(null); // mirror of audioId so callbacks below keep a stable identity
+  const [audioPlaying, setAudioPlaying] = useState(false);
+  const setActiveAudio = useCallback((id: number | null) => {
+    audioIdRef.current = id;
+    setAudioId(id);
+  }, []);
+
+  useEffect(() => {
+    const a = new Audio();
+    a.preload = "metadata";
+    audioRef.current = a;
+    const onPlay = () => setAudioPlaying(true);
+    const onPause = () => setAudioPlaying(false);
+    const onEnded = () => setActiveAudio(null);
+    const onError = () => {
+      console.error("Audio playback failed:", a.error?.code, a.error?.message);
+      setActiveAudio(null);
+    };
+    a.addEventListener("play", onPlay);
+    a.addEventListener("pause", onPause);
+    a.addEventListener("ended", onEnded);
+    a.addEventListener("error", onError);
+    return () => {
+      a.pause();
+      audioRef.current = null;
+    };
+  }, [setActiveAudio]);
+
+  const stopAudio = useCallback(() => {
+    const a = audioRef.current;
+    if (a) {
+      a.pause();
+      a.removeAttribute("src");
+      a.load();
+    }
+    setActiveAudio(null);
+    setAudioPlaying(false);
+  }, [setActiveAudio]);
+
+  const togglePlay = useCallback((entry: HistoryEntry) => {
+    const a = audioRef.current;
+    if (!a || !entry.audio_path) return;
+    if (audioIdRef.current === entry.id) {
+      if (a.paused) a.play().catch((e) => console.error("Audio play failed:", e));
+      else a.pause();
+      return;
+    }
+    a.src = convertFileSrc(entry.audio_path);
+    setActiveAudio(entry.id);
+    a.play().catch((e) => console.error("Audio play failed:", e));
+  }, [setActiveAudio]);
+
+  const toggleExpanded = useCallback((id: number) => {
+    setExpandedId((current) => (current === id ? null : id));
+  }, []);
 
   const loadHistory = useCallback(async () => {
     const entries = await invoke<HistoryEntry[]>("get_history");
@@ -402,12 +673,15 @@ function App() {
     const unlisten3 = listen<{ version: string }>("update-downloaded", (e) => {
       setUpdateVersion(e.payload.version);
     });
+    // Recording is about to open the mic: stop history playback so it is not captured
+    const unlisten4 = listen("recording-started", () => stopAudio());
     return () => {
       unlisten1.then((f) => f());
       unlisten2.then((f) => f());
       unlisten3.then((f) => f());
+      unlisten4.then((f) => f());
     };
-  }, [loadHistory, loadSettings, checkPermissions]);
+  }, [loadHistory, loadSettings, checkPermissions, stopAudio]);
 
   // Refresh storage stats whenever the Settings view opens
   useEffect(() => {
@@ -417,6 +691,7 @@ function App() {
 
   const handleClearAll = async () => {
     setClearing(true);
+    stopAudio();
     try {
       await invoke("clear_history");
       await loadHistory();
@@ -460,18 +735,19 @@ function App() {
     await waitForPermission("check_accessibility", setAccessibilityOk);
   }, [waitForPermission]);
 
-  const copyText = async (text: string, id: number) => {
+  const copyText = useCallback(async (text: string, id: number) => {
     await writeText(text);
     setCopied(id);
     setTimeout(() => setCopied(null), 1500);
-  };
+  }, []);
 
-  const deleteEntry = async (id: number) => {
+  const deleteEntry = useCallback(async (id: number) => {
+    if (audioIdRef.current === id) stopAudio();
     await invoke("delete_history_entry", { id });
     setHistory((h) => h.filter((e) => e.id !== id));
-  };
+  }, [stopAudio]);
 
-  const retryEntry = async (id: number) => {
+  const retryEntry = useCallback(async (id: number) => {
     setRetrying(id);
     try {
       await invoke("retry_transcription", { id });
@@ -480,7 +756,7 @@ function App() {
       console.error("Retry failed:", e);
     }
     setRetrying(null);
-  };
+  }, [loadHistory]);
 
   const saveSettings = async () => {
     if (!settings) return;
@@ -506,39 +782,8 @@ function App() {
     }
   };
 
-  const formatTime = (ts: number) => {
-    const d = new Date(ts * 1000);
-    const now = new Date();
-    if (d.toDateString() === now.toDateString()) {
-      return d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-    }
-    return d.toLocaleDateString([], { month: "short", day: "numeric" }) +
-      " " + d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  };
 
-  const formatDuration = (ms: number | null) => {
-    if (!ms) return "";
-    const secs = Math.round(ms / 1000);
-    if (secs < 60) return `${secs}s`;
-    const mins = Math.floor(secs / 60);
-    const remainSecs = secs % 60;
-    return `${mins}m${remainSecs}s`;
-  };
 
-  const IconBtn = ({ onClick, title, children, accent }: { onClick: () => void; title: string; children: React.ReactNode; accent?: boolean }) => (
-    <button
-      onClick={onClick}
-      title={title}
-      className="p-1.5 rounded-md"
-      style={{
-        background: accent ? "var(--accent)" : "transparent",
-        color: accent ? "white" : "var(--text-secondary)",
-        lineHeight: 0,
-      }}
-    >
-      {children}
-    </button>
-  );
 
   // Onboarding
   if (view === "onboarding" && settings) {
@@ -855,72 +1100,22 @@ function App() {
         </p>
       ) : (
         <div className="space-y-2">
-          {history.map((entry) => {
-            const isFailed = entry.text.startsWith("[Error:");
-            return (
-            <div key={entry.id} className="rounded-lg p-3" style={{ background: "var(--card)", border: isFailed ? "1px solid #ff453a40" : "1px solid var(--border)" }}>
-              {isFailed ? (
-                <div className="text-xs" style={{ color: "#ff453a" }}>
-                  {entry.text.slice(1, -1)}
-                </div>
-              ) : (
-              <div
-                className="text-sm cursor-pointer"
-                onClick={() => setExpandedId(expandedId === entry.id ? null : entry.id)}
-                style={{ userSelect: "text" }}
-              >
-                {expandedId === entry.id
-                  ? entry.text
-                  : entry.text.length > 100
-                    ? entry.text.slice(0, 100) + "..."
-                    : entry.text}
-              </div>
-              )}
-              <div className="flex items-center justify-between mt-2">
-                <div className="flex items-center gap-2">
-                  {entry.duration_ms ? (
-                    <span className="text-xs font-medium px-1.5 py-0.5 rounded" style={{ background: "var(--border)", color: "var(--text)" }}>
-                      {formatDuration(entry.duration_ms)}
-                    </span>
-                  ) : null}
-                  <span className="text-xs" style={{ color: "var(--text-secondary)" }}>
-                    {formatTime(entry.started_at ? Math.floor(entry.started_at / 1000) : entry.timestamp)}
-                  </span>
-                </div>
-                <div className="flex gap-0.5">
-                  {!isFailed && (
-                  <IconBtn onClick={() => copyText(entry.text, entry.id)} title="Copy" accent={copied === entry.id}>
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <rect x="9" y="9" width="13" height="13" rx="2" />
-                      <path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" />
-                    </svg>
-                  </IconBtn>
-                  )}
-                  {entry.audio_path && (
-                    <IconBtn onClick={() => retryEntry(entry.id)} title="Retry">
-                      {retrying === entry.id ? (
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round" style={{ animation: "spin 1s linear infinite" }}>
-                          <path d="M21 12a9 9 0 1 1-6.219-8.56" />
-                        </svg>
-                      ) : (
-                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                          <polyline points="23 4 23 10 17 10" />
-                          <path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10" />
-                        </svg>
-                      )}
-                    </IconBtn>
-                  )}
-                  <IconBtn onClick={() => deleteEntry(entry.id)} title="Delete">
-                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                      <polyline points="3 6 5 6 21 6" />
-                      <path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2" />
-                    </svg>
-                  </IconBtn>
-                </div>
-              </div>
-            </div>
-          );
-          })}
+          {history.map((entry) => (
+            <HistoryCard
+              key={entry.id}
+              entry={entry}
+              expanded={expandedId === entry.id}
+              copied={copied === entry.id}
+              retrying={retrying === entry.id}
+              playing={audioId === entry.id && audioPlaying}
+              audio={audioId === entry.id ? audioRef.current : null}
+              onToggleExpand={toggleExpanded}
+              onCopy={copyText}
+              onPlay={togglePlay}
+              onRetry={retryEntry}
+              onDelete={deleteEntry}
+            />
+          ))}
         </div>
       )}
       </div>

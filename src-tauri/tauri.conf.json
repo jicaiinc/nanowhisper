@@ -13,7 +13,14 @@
     "macOSPrivateApi": true,
     "windows": [],
     "security": {
-      "csp": null
+      "csp": null,
+      "assetProtocol": {
+        "enable": true,
+        "scope": {
+          "requireLiteralLeadingDot": false,
+          "allow": ["$HOME/.nanowhisper/audio/**"]
+        }
+      }
     }
   },
   "bundle": {
