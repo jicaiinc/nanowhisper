@@ -120,3 +120,7 @@ Tauri v2 的 Windows 打包涉及两套独立的签名体系：
 **`createUpdaterArtifacts: true`（v2 模式）的 Windows 产物**：
 - updater 直接复用 NSIS installer `.exe`（不是 `.nsis.zip`，那是 v1Compatible 模式）
 - 产物为 `*-setup.exe` + `*-setup.exe.sig`
+
+
+# 注意事项
+- 【绝对禁止】本地的录音文件和转录文本 json 等配置文件对我极其重要，任何时刻不许删除。
